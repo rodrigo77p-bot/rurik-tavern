@@ -414,3 +414,10 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
     max-height: 85vh;
     overflow-y: auto;
 }
+
+/* ===== iOS ZOOM FIX: inputs < 16px trigger auto-zoom ===== */
+@media (max-width: 768px) {
+    input, select, textarea {
+        font-size: 16px !important;
+    }
+}

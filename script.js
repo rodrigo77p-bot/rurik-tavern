@@ -1,3 +1,12 @@
+// ===== iOS SCROLL/ZOOM FIX =====
+(function(){
+    // Prevent iOS from zooming on input focus by ensuring viewport is correct
+    const vp = document.querySelector('meta[name="viewport"]');
+    if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
+    // Disable scroll restoration so reload doesn't jump
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+})();
+
 // ===================== CONSTANTS =====================
 
 // ===================== FIREBASE =====================
