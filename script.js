@@ -11,6 +11,21 @@ const ADVENTURES = [
 const CLASS_ICONS = { 'Guerrero':'⚔️','Mago':'🔮','Pícaro':'🗡️','Clérigo':'✦','Bardo':'🎭','Druida':'🌿','Explorador':'🏹','Paladín':'🛡️','Hechicero':'⚡','Monje':'👊' };
 const STATUS_LABELS = { alive:'Vivo', dead:'Muerto', cursed:'Maldito' };
 
+// ===================== PORTRAIT GENERATION =====================
+function getPortraitUrl(char, size=512) {
+    if (!char) return '';
+    const parts = [char.race, char.classe, char.gender||'', char.appearance||''].filter(Boolean).join(', ');
+    const prompt = encodeURIComponent(`fantasy portrait, ${parts}, dark fantasy art, dramatic lighting, detailed face, painterly style, high quality`);
+    const seed = char.portraitSeed || 42;
+    return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
+}
+function getCompanionPortraitUrl(companion, size=256) {
+    const desc = [companion.name, companion.role||'', companion.description||''].filter(Boolean).join(', ');
+    const prompt = encodeURIComponent(`fantasy portrait, ${desc}, dark fantasy art, dramatic lighting, painterly style`);
+    const seed = companion.portraitSeed || (companion.name.split('').reduce((a,c)=>a+c.charCodeAt(0),0) * 17 % 99999);
+    return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
+}
+
 // ===================== WORLD STATE =====================
 function getWorldState() {
     try { return JSON.parse(localStorage.getItem('dndWorldState') || '{"events":[]}'); } catch(e) { return { events: [] }; }
@@ -226,8 +241,12 @@ function renderCharacterHub() {
         const hpColor = isDead ? '#555' : hpPct>60 ? '#4a7c59' : hpPct>30 ? '#8a6a20' : '#7c4a4a';
         const statusBadge = isDead ? '<span class="char-status dead">💀 Muerto</span>' : isCursed ? `<span class="char-status cursed">🌑 Maldito</span>` : '<span class="char-status alive">⬤ Vivo</span>';
         const icon = CLASS_ICONS[c.classe] || '⚔️';
+        const portraitUrl = getPortraitUrl(c, 200);
         return `<div class="char-card ${isDead?'dead':''}" data-id="${c.id}" ${isDead?'':'style="cursor:pointer"'}>
-            <div class="char-card-avatar">${isDead?'🪦':icon}</div>
+            <div class="char-card-avatar-wrap">
+                <img src="${isDead ? '' : portraitUrl}" class="char-card-portrait" alt="${c.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+                <div class="char-avatar-fallback" style="${isDead?'display:flex':'display:none'}">${isDead?'🪦':icon}</div>
+            </div>
             <div class="char-card-info">
                 <div class="char-card-name">${c.name} ${statusBadge}</div>
                 <div class="char-card-class">${c.race} · ${c.classe}${c.classEvolution?' → '+c.classEvolution:''}</div>
@@ -288,6 +307,7 @@ function renderCharacterCreationScreen() {
         </div>
         <div class="input-group"><label>Trasfondo</label><select id="charBackground"><option value="">Elige...</option>${['Soldado','Criminal','Noble','Huérfano','Mercader','Erudito','Marginado'].map(v=>`<option value="${v}">${v}</option>`).join('')}</select></div>
         <div class="input-group"><label>Motivación (opcional)</label><input type="text" id="charMotivation" placeholder="Ej: vengar a mi familia..."></div>
+        <div class="input-group"><label>Descripción física (para generar retrato)</label><textarea id="charAppearance" rows="2" placeholder="Ej: cabello negro largo, ojos grises, cicatriz en la mejilla, complexión atlética..." style="background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.6rem 0.75rem;border-radius:4px;font-size:0.9rem;font-family:'Lora',serif;resize:vertical"></textarea></div>
         <div class="input-group"><label>Estadísticas</label><button class="btn" id="rollStatsBtn" style="margin-top:0.25rem">🎲 Tirar Dados</button><div id="statsDisplay" style="margin-top:0.5rem;font-size:0.8rem;color:var(--text-muted);text-align:center"></div></div>
         <button class="btn" id="createCharBtn" disabled>⚔️ Continuar</button>
         <button class="btn" id="backToHubBtn" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);margin-top:0.5rem">← Volver</button>
@@ -347,6 +367,25 @@ function renderChatScreen() {
             <div style="font-size:0.78rem;color:var(--accent);margin-bottom:0.75rem">Su historia quedará grabada en el mundo para siempre.</div>
             <button class="modal-btn" id="deathContinueBtn">Ver el legado y volver</button>
         </div></div>
+        <div id="companionChatModal" class="modal hidden">
+            <div class="modal-box companion-chat-box">
+                <div class="companion-chat-header" id="companionChatHeader">
+                    <div class="companion-chat-portrait-wrap">
+                        <img id="companionChatPortrait" src="" class="companion-chat-portrait" loading="lazy">
+                    </div>
+                    <div class="companion-chat-title-wrap">
+                        <div class="companion-chat-name" id="companionChatName"></div>
+                        <div class="companion-chat-role" id="companionChatRole"></div>
+                    </div>
+                    <button class="companion-chat-close" id="closeCompanionChatBtn">✕</button>
+                </div>
+                <div class="companion-chat-messages" id="companionChatMessages"></div>
+                <div class="companion-chat-input-row">
+                    <input type="text" id="companionChatInput" placeholder="Habla con este personaje..." class="inv-input">
+                    <button class="modal-btn small" id="companionChatSendBtn">Enviar</button>
+                </div>
+            </div>
+        </div>
         <div class="game-layout">
             <div class="chat-area">
                 <div class="chat-container" id="chatContainer"></div>
@@ -436,6 +475,8 @@ function bindCharacterCreation() {
             id, name: nameInput.value.trim(), race: raceSelect.value, classe: classSelect.value,
             background: bgSelect.value, motivation: document.getElementById('charMotivation').value.trim(),
             gender: document.getElementById('charGender').value,
+            appearance: document.getElementById('charAppearance').value.trim(),
+            portraitSeed: Math.floor(Math.random() * 99999),
             stats: state.tempStats, status:'alive', created: new Date().toISOString().slice(0,10)
         };
         updateCharData(char);
@@ -528,6 +569,11 @@ function bindChat() {
     // Legacy
     document.getElementById('closeLegacyBtn').addEventListener('click', () => document.getElementById('legacyModal').classList.add('hidden'));
 
+    // Companion chat
+    document.getElementById('closeCompanionChatBtn').addEventListener('click', () => document.getElementById('companionChatModal').classList.add('hidden'));
+    document.getElementById('companionChatSendBtn').addEventListener('click', sendCompanionMessage);
+    document.getElementById('companionChatInput').addEventListener('keypress', e => { if (e.key==='Enter') sendCompanionMessage(); });
+
     // Death
     document.getElementById('deathContinueBtn').addEventListener('click', () => {
         document.getElementById('deathModal').classList.add('hidden');
@@ -536,6 +582,72 @@ function bindChat() {
 }
 
 // ===================== MODALS =====================
+// ===================== COMPANION CHAT =====================
+const companionChats = {};
+let activeChatCompanion = null;
+
+window.openCompanionChat = function(companionName) {
+    activeChatCompanion = companionName;
+    const companion = (state.gameState.companions||[]).find(c=>c.name===companionName);
+    if (!companion) return;
+    document.getElementById('companionChatName').textContent = companion.name;
+    document.getElementById('companionChatRole').textContent = companion.role || '';
+    document.getElementById('companionChatPortrait').src = getCompanionPortraitUrl(companion, 120);
+    if (!companionChats[companionName]) companionChats[companionName] = [];
+    renderCompanionChat();
+    document.getElementById('companionChatModal').classList.remove('hidden');
+    document.getElementById('companionChatInput').focus();
+};
+
+function renderCompanionChat() {
+    const msgs = companionChats[activeChatCompanion] || [];
+    const el = document.getElementById('companionChatMessages');
+    if (!el) return;
+    el.innerHTML = msgs.length === 0
+        ? `<div class="cc-empty">Di algo para iniciar la conversación</div>`
+        : msgs.map(m => `<div class="cc-msg cc-${m.role}"><span class="cc-bubble">${m.content}</span></div>`).join('');
+    el.scrollTop = el.scrollHeight;
+}
+
+async function sendCompanionMessage() {
+    const input = document.getElementById('companionChatInput');
+    const text = input.value.trim();
+    if (!text || !activeChatCompanion) return;
+    input.value = '';
+    if (!companionChats[activeChatCompanion]) companionChats[activeChatCompanion] = [];
+    companionChats[activeChatCompanion].push({ role:'player', content: text });
+    renderCompanionChat();
+    const sendBtn = document.getElementById('companionChatSendBtn');
+    sendBtn.disabled = true; sendBtn.textContent = '...';
+    try {
+        const companion = (state.gameState.companions||[]).find(c=>c.name===activeChatCompanion);
+        const rel = state.gameState.relationships?.[activeChatCompanion];
+        const char = state.character;
+        const recentHistory = companionChats[activeChatCompanion].slice(-10).map(m=>`${m.role==='player'?char.name:companion.name}: ${m.content}`).join('
+');
+        const system = `Eres ${companion.name}${companion.role?', '+companion.role:''}. ${companion.description||''}
+Estás en ${state.gameState.location} junto a ${char.name}, ${char.race} ${char.classe}.
+Tu relación con ${char.name}: ${rel?.type||'neutral'} (nivel ${rel?.level||0}/5).
+Responde en primera persona, en character, de forma natural y concisa (1-4 frases). Habla en el mismo idioma que ${char.name}.`;
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method:'POST',
+            headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
+            body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:[{role:'system',content:system},{role:'user',content:recentHistory+'
+'+char.name+': '+text}], temperature:0.85, max_tokens:200 })
+        });
+        const data = await response.json();
+        const reply = data.choices[0].message.content.trim().replace(/^[^:]+:\s*/,'');
+        companionChats[activeChatCompanion].push({ role:'companion', content: reply });
+        renderCompanionChat();
+    } catch(e) {
+        companionChats[activeChatCompanion].push({ role:'companion', content:'...(silencio)' });
+        renderCompanionChat();
+    } finally {
+        sendBtn.disabled = false; sendBtn.textContent = 'Enviar';
+        document.getElementById('companionChatInput').focus();
+    }
+}
+
 function openInventoryModal() {
     document.getElementById('inventoryModal').classList.remove('hidden');
     renderInventoryModal();
@@ -655,19 +767,28 @@ function updatePartyPanel() {
         const cp = Math.max(0,Math.min(100,(c.hp/c.maxHp)*100));
         const rel = state.gameState.relationships?.[c.name];
         const relBadge = rel && rel.type !== 'neutral' ? `<span class="rel-badge rel-${rel.type}">${rel.type==='romantic'?'💕':rel.type==='friend'?'🤝':rel.type==='rival'?'⚔️':'👤'} ${rel.type}</span>` : '';
+        const cPortrait = getCompanionPortraitUrl(c, 120);
         return `<div class="companion-card">
-            <div class="companion-avatar">${c.icon||'👤'}</div>
+            <div class="companion-avatar-wrap">
+                <img src="${cPortrait}" class="companion-portrait" alt="${c.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+                <div class="companion-avatar" style="display:none">${c.icon||'👤'}</div>
+            </div>
             <div class="companion-info">
                 <div class="companion-name">${c.name} ${relBadge}</div>
                 <div class="companion-role">${c.role||''}</div>
                 ${c.description ? `<div class="companion-desc">${c.description}</div>` : ''}
                 <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${cp}%;background:${cp>60?'#4a7c59':cp>30?'#8a6a20':'#7c4a4a'}"></div></div>
                 <div class="hp-text">PV ${c.hp}/${c.maxHp}</div>
+                <button class="companion-chat-btn" onclick="openCompanionChat('${c.name.replace(/'/g,"\\'")}')">💬 Hablar</button>
             </div>
         </div>`;
     }).join('');
+    const portraitUrl = getPortraitUrl(char, 300);
     panel.innerHTML = `<div class="party-card">
-        <div class="party-avatar">${CLASS_ICONS[char.classe]||'⚔️'}</div>
+        <div class="party-portrait-wrap">
+            <img src="${portraitUrl}" class="party-portrait" alt="${char.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+            <div class="party-avatar party-avatar-fallback" style="display:none">${CLASS_ICONS[char.classe]||'⚔️'}</div>
+        </div>
         <div class="party-name">${char.name}</div>
         <div class="party-class">${classLabel}</div>
         ${curseHtml}

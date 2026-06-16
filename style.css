@@ -169,6 +169,158 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
 .legacy-type.discovery { color:#60b0d0; }
 
 
+
+/* ---- CHARACTER PORTRAITS ---- */
+.char-card-avatar-wrap {
+    width: 52px;
+    height: 65px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-dark);
+    position: relative;
+}
+.char-card-portrait {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.char-avatar-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    background: rgba(212,175,55,0.08);
+}
+
+/* ---- PARTY PANEL PORTRAIT ---- */
+.party-portrait-wrap {
+    width: 100%;
+    aspect-ratio: 4/5;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-dark);
+    margin-bottom: 0.3rem;
+    position: relative;
+}
+.party-portrait {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.party-avatar-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+}
+
+/* ---- COMPANION PORTRAIT ---- */
+.companion-avatar-wrap {
+    width: 38px;
+    height: 48px;
+    flex-shrink: 0;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-dark);
+}
+.companion-portrait {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.companion-chat-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 0.2rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    cursor: pointer;
+    margin-top: 0.2rem;
+    transition: all 0.15s;
+    font-family: 'Lora', serif;
+    width: 100%;
+}
+.companion-chat-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---- COMPANION CHAT MODAL ---- */
+.companion-chat-box {
+    max-width: 420px !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+.companion-chat-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(212,175,55,0.05);
+}
+.companion-chat-portrait-wrap {
+    width: 44px;
+    height: 55px;
+    border-radius: 5px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.companion-chat-portrait {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.companion-chat-title-wrap { flex: 1; min-width: 0; }
+.companion-chat-name { font-family: 'Cinzel', serif; font-size: 0.88rem; color: var(--accent); }
+.companion-chat-role { font-size: 0.72rem; color: var(--text-muted); }
+.companion-chat-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1rem; padding: 0.2rem; flex-shrink: 0; }
+.companion-chat-close:hover { color: var(--text-light); }
+
+.companion-chat-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    max-height: 280px;
+    min-height: 120px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+.cc-empty { text-align: center; color: var(--text-muted); font-size: 0.82rem; padding: 1rem 0; font-style: italic; }
+.cc-msg { display: flex; }
+.cc-player { justify-content: flex-end; }
+.cc-companion { justify-content: flex-start; }
+.cc-bubble {
+    max-width: 82%;
+    padding: 0.45rem 0.75rem;
+    border-radius: 14px;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+.cc-player .cc-bubble { background: var(--accent); color: var(--bg-dark); border-bottom-right-radius: 3px; }
+.cc-companion .cc-bubble { background: var(--bg-darker); border: 1px solid var(--border); color: var(--text-light); border-bottom-left-radius: 3px; }
+
+.companion-chat-input-row {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0.6rem 1rem;
+    border-top: 1px solid var(--border);
+}
+
 /* ---- DELETE BUTTON ON CHAR CARDS ---- */
 .char-card { position: relative; }
 .char-delete-btn {
