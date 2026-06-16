@@ -235,6 +235,8 @@ function renderCharacterHub() {
                 <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
                 <div class="char-adv">${adv ? adv.title : 'Sin aventura'} · ${history.length} turnos</div>`}
             </div>
+        </div>
+            <button class="char-delete-btn" data-id="${c.id}" title="Eliminar personaje">🗑️</button>
         </div>`;
     }).join('');
 
@@ -262,6 +264,14 @@ function renderCharacterHub() {
             </div>
         </div>
         ${legacyHtml}
+        <div id="deleteModal" class="modal hidden"><div class="modal-box">
+            <div class="modal-title" style="color:#e05555">⚠️ Eliminar Personaje</div>
+            <div id="deleteModalText" style="font-size:0.85rem;color:var(--text-muted);text-align:center;margin:0.5rem 0;line-height:1.6"></div>
+            <p style="font-size:0.82rem;color:var(--text-muted);text-align:center">Escribe <strong style="color:var(--accent)">confirmar</strong> para borrar:</p>
+            <input type="text" id="deleteConfirmInput" placeholder="confirmar" class="inv-input" style="margin-top:0.4rem">
+            <button class="modal-btn danger" id="deleteConfirmBtn" disabled>🗑️ Eliminar para siempre</button>
+            <button class="modal-btn" id="deleteCancelBtn">✕ Cancelar</button>
+        </div></div>
     </div>`;
 }
 
@@ -271,6 +281,7 @@ function renderCharacterCreationScreen() {
     return `<div class="container">
         <h1>Nuevo Personaje</h1>
         <div class="input-group"><label>Nombre</label><input type="text" id="charName" placeholder="Ej: Lyra, Gareth..."></div>
+        <div class="input-group"><label>Género</label><select id="charGender"><option value="Hombre">Hombre</option><option value="Mujer">Mujer</option><option value="No binario">No binario</option><option value="Otro">Otro</option></select></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
             <div class="input-group" style="margin:0"><label>Raza</label><select id="charRace"><option value="">Elige...</option>${races.map(([v,d])=>`<option value="${v}">${v} — ${d}</option>`).join('')}</select></div>
             <div class="input-group" style="margin:0"><label>Clase</label><select id="charClass"><option value="">Elige...</option>${classes.map(([v,d])=>`<option value="${v}">${v} — ${d}</option>`).join('')}</select></div>
@@ -359,6 +370,32 @@ function bindApiKeyScreen() {
 
 function bindCharacterHub() {
     document.getElementById('newCharBtn').addEventListener('click', () => showScreen('characterCreation'));
+    document.querySelectorAll('.char-delete-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const char = getCharData(id);
+            if (!char) return;
+            const modal = document.getElementById('deleteModal');
+            document.getElementById('deleteModalText').textContent = `¿Eliminar a "${char.name}" (${char.race} ${char.classe})? Esta acción es irreversible.`;
+            const input = document.getElementById('deleteConfirmInput');
+            const confirmBtn = document.getElementById('deleteConfirmBtn');
+            input.value = '';
+            confirmBtn.disabled = true;
+            input.oninput = () => { confirmBtn.disabled = input.value.trim().toLowerCase() !== 'confirmar'; };
+            confirmBtn.onclick = () => {
+                const chars = getAllCharacters().filter(c => c.id !== id);
+                saveAllCharacters(chars);
+                localStorage.removeItem('dndGameState_' + id);
+                localStorage.removeItem('dndChatHistory_' + id);
+                localStorage.removeItem('dndAdventure_' + id);
+                modal.classList.add('hidden');
+                showScreen('characterHub');
+            };
+            document.getElementById('deleteCancelBtn').onclick = () => modal.classList.add('hidden');
+            modal.classList.remove('hidden');
+        });
+    });
     document.querySelectorAll('.char-card:not(.new-char):not(.dead)').forEach(card => {
         card.addEventListener('click', () => {
             const id = card.dataset.id;
@@ -397,6 +434,7 @@ function bindCharacterCreation() {
         const char = {
             id, name: nameInput.value.trim(), race: raceSelect.value, classe: classSelect.value,
             background: bgSelect.value, motivation: document.getElementById('charMotivation').value.trim(),
+            gender: document.getElementById('charGender').value,
             stats: state.tempStats, status:'alive', created: new Date().toISOString().slice(0,10)
         };
         updateCharData(char);
@@ -613,7 +651,18 @@ function updatePartyPanel() {
     const curseHtml = state.gameState.curse ? `<div class="curse-badge">🌑 ${state.gameState.curse}</div>` : '';
     const companionHtml = (state.gameState.companions||[]).map(c => {
         const cp = Math.max(0,Math.min(100,(c.hp/c.maxHp)*100));
-        return `<div class="companion-card"><div class="companion-avatar">${c.icon||'👤'}</div><div class="companion-info"><div class="companion-name">${c.name}</div><div class="companion-role">${c.role||''}</div><div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${cp}%;background:${cp>60?'#4a7c59':cp>30?'#8a6a20':'#7c4a4a'}"></div></div><div class="hp-text">PV ${c.hp}/${c.maxHp}</div></div></div>`;
+        const rel = state.gameState.relationships?.[c.name];
+        const relBadge = rel && rel.type !== 'neutral' ? `<span class="rel-badge rel-${rel.type}">${rel.type==='romantic'?'💕':rel.type==='friend'?'🤝':rel.type==='rival'?'⚔️':'👤'} ${rel.type}</span>` : '';
+        return `<div class="companion-card">
+            <div class="companion-avatar">${c.icon||'👤'}</div>
+            <div class="companion-info">
+                <div class="companion-name">${c.name} ${relBadge}</div>
+                <div class="companion-role">${c.role||''}</div>
+                ${c.description ? `<div class="companion-desc">${c.description}</div>` : ''}
+                <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${cp}%;background:${cp>60?'#4a7c59':cp>30?'#8a6a20':'#7c4a4a'}"></div></div>
+                <div class="hp-text">PV ${c.hp}/${c.maxHp}</div>
+            </div>
+        </div>`;
     }).join('');
     panel.innerHTML = `<div class="party-card">
         <div class="party-avatar">${CLASS_ICONS[char.classe]||'⚔️'}</div>
@@ -625,7 +674,17 @@ function updatePartyPanel() {
         <div class="stats-mini">${Object.entries(char.stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `<div class="stat-mini"><span class="stat-label">${ab}</span><span class="stat-val">${v}</span><span class="stat-mod">${m>=0?'+':''}${m}</span></div>`;}).join('')}</div>
         <div class="party-bg">${char.background}${char.motivation?(' · '+char.motivation.substring(0,28)):''}</div>
     </div>
-    ${companionHtml ? `<div class="companions-section"><div class="companions-label">Compañeros</div>${companionHtml}</div>` : ''}`;
+    ${companionHtml ? `<div class="companions-section"><div class="companions-label">Compañeros</div>${companionHtml}</div>` : ''}
+    ${Object.entries(state.gameState.relationships||{}).filter(([k])=>!(state.gameState.companions||[]).find(c=>c.name===k)).length > 0 ? `
+    <div class="companions-section">
+        <div class="companions-label">Relaciones</div>
+        ${Object.entries(state.gameState.relationships||{}).filter(([k])=>!(state.gameState.companions||[]).find(c=>c.name===k)).map(([name,rel])=>`
+        <div class="rel-npc-row">
+            <span class="rel-badge rel-${rel.type}">${rel.type==='romantic'?'💕':rel.type==='friend'?'🤝':rel.type==='rival'?'⚔️':'👤'}</span>
+            <span class="rel-npc-name">${name}</span>
+            <span class="rel-level">${'★'.repeat(rel.level||0)}${'☆'.repeat(5-(rel.level||0))}</span>
+        </div>`).join('')}
+    </div>` : ''}`;
 }
 
 // ===================== API =====================
@@ -703,7 +762,7 @@ function buildPrompt(playerAction, rollResult) {
     const system = `Eres el Maestro de Mazmorras de una campaña de D&D en un mundo de fantasía oscura medieval. Narras en segunda persona con prosa cinematográfica.
 
 PERSONAJE:
-- ${char.name}, ${char.race}, ${classLabel}, trasfondo: ${char.background}${char.motivation?', motivación: '+char.motivation:''}
+- ${char.name}, ${char.race}, ${classLabel}, ${char.gender||''}${char.gender ? ',' : ''} trasfondo: ${char.background}${char.motivation?', motivación: '+char.motivation:''}
 - FUE ${stats.FUE}(${fmod('FUE')}), DES ${stats.DES}(${fmod('DES')}), CON ${stats.CON}(${fmod('CON')}), INT ${stats.INT}(${fmod('INT')}), SAB ${stats.SAB}(${fmod('SAB')}), CAR ${stats.CAR}(${fmod('CAR')})
 ${curseNote}
 

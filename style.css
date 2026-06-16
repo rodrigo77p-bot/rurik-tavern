@@ -168,6 +168,72 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
 .legacy-type.curse { color:#c088e0; }
 .legacy-type.discovery { color:#60b0d0; }
 
+
+/* ---- DELETE BUTTON ON CHAR CARDS ---- */
+.char-card { position: relative; }
+.char-delete-btn {
+    position: absolute;
+    top: 0.45rem;
+    right: 0.45rem;
+    background: none;
+    border: none;
+    font-size: 0.8rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+    padding: 0.1rem;
+    line-height: 1;
+}
+.char-card:hover .char-delete-btn { opacity: 0.6; }
+.char-delete-btn:hover { opacity: 1 !important; }
+
+/* ---- COMPANION DESCRIPTIONS & RELATIONS ---- */
+.companion-desc {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-style: italic;
+    line-height: 1.4;
+    margin-top: 0.1rem;
+}
+.rel-badge {
+    font-size: 0.62rem;
+    font-family: 'Cinzel', serif;
+    padding: 0.06rem 0.35rem;
+    border-radius: 10px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+.rel-badge.rel-romantic { background: rgba(180,80,120,0.2); color: #e090b8; }
+.rel-badge.rel-friend   { background: rgba(74,124,89,0.2); color: #7fc898; }
+.rel-badge.rel-rival    { background: rgba(180,100,40,0.2); color: #e0a060; }
+.rel-badge.rel-neutral  { background: rgba(100,100,100,0.15); color: var(--text-muted); }
+.rel-badge.rel-enemy    { background: rgba(180,50,50,0.2); color: #e08080; }
+
+.rel-npc-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: rgba(255,255,255,0.02);
+}
+.rel-npc-name {
+    font-family: 'Cinzel', serif;
+    font-size: 0.7rem;
+    color: var(--text-light);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rel-level {
+    font-size: 0.6rem;
+    color: var(--accent);
+    letter-spacing: -0.05em;
+    flex-shrink: 0;
+}
+
 /* ---- MOBILE ---- */
 @media (max-width:700px) {
     #app { padding:0.4rem; }
