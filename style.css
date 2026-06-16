@@ -401,3 +401,16 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
 @media (max-width:480px) {
     .adv-grid,.hub-chars { grid-template-columns:1fr; }
 }
+
+/* ===== MOBILE: hide party sidebar, use modal instead ===== */
+@media (max-width: 768px) {
+    .party-panel { display: none !important; }
+    .game-layout { grid-template-columns: 1fr !important; }
+}
+
+/* ===== PARTY MODAL ===== */
+.party-modal-box {
+    max-width: 420px;
+    max-height: 85vh;
+    overflow-y: auto;
+}

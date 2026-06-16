@@ -96,13 +96,13 @@ const STATUS_LABELS = { alive:'Vivo', dead:'Muerto', cursed:'Maldito' };
 function getPortraitUrl(char, size=512) {
     if (!char) return '';
     const parts = [char.race, char.classe, char.gender||'', char.appearance||''].filter(Boolean).join(', ');
-    const prompt = encodeURIComponent(`fantasy portrait, ${parts}, dark fantasy art, dramatic lighting, detailed face, painterly style, high quality`);
+    const prompt = encodeURIComponent(`oil painting portrait, ${parts}, colorful fantasy art, warm vibrant colors, half body, painterly brushstrokes, renaissance fantasy style, vivid dramatic lighting, richly detailed, masterpiece`);
     const seed = char.portraitSeed || 42;
     return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
 }
 function getCompanionPortraitUrl(companion, size=256) {
     const desc = [companion.name, companion.role||'', companion.description||''].filter(Boolean).join(', ');
-    const prompt = encodeURIComponent(`fantasy portrait, ${desc}, dark fantasy art, dramatic lighting, painterly style`);
+    const prompt = encodeURIComponent(`oil painting portrait, ${desc}, colorful fantasy art, warm vibrant colors, half body, painterly brushstrokes, renaissance fantasy style, vivid dramatic lighting, richly detailed`);
     const seed = companion.portraitSeed || (companion.name.split('').reduce((a,c)=>a+c.charCodeAt(0),0) * 17 % 99999);
     return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
 }
@@ -443,8 +443,9 @@ function renderChatScreen() {
         </div>
         <div id="menuModal" class="modal hidden"><div class="modal-box">
             <div class="modal-title">Menú — ${state.character?.name}</div>
+            <button class="modal-btn" id="partyMenuBtn">👥 Party & Compañeros</button>
             <button class="modal-btn" id="newAdventureBtn">🗺️ Nueva Aventura (mismo personaje)</button>
-            <button class="modal-btn" id="switchCharBtn">👥 Cambiar Personaje</button>
+            <button class="modal-btn" id="switchCharBtn">🔄 Cambiar Personaje</button>
             <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
             <button class="modal-btn" id="viewLegacyBtn">📜 Ver Legado del Mundo</button>
             <button class="modal-btn" id="logoutBtn">🚪 Cerrar Sesión</button>
@@ -485,6 +486,13 @@ function renderChatScreen() {
                     <input type="text" id="companionChatInput" placeholder="Habla con este personaje..." class="inv-input">
                     <button class="modal-btn small" id="companionChatSendBtn">Enviar</button>
                 </div>
+            </div>
+        </div>
+        <div id="partyModal" class="modal hidden">
+            <div class="modal-box party-modal-box">
+                <div class="modal-title">👥 Party</div>
+                <div id="partyModalContent"></div>
+                <button class="modal-btn" id="closePartyModalBtn" style="margin-top:0.5rem">✕ Cerrar</button>
             </div>
         </div>
         <div class="game-layout">
@@ -785,6 +793,13 @@ function bindChat() {
         fbUser = null;
         showScreen('auth');
     });
+    document.getElementById('partyMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden');
+        openPartyModal();
+    });
+    document.getElementById('closePartyModalBtn').addEventListener('click', () => {
+        document.getElementById('partyModal').classList.add('hidden');
+    });
     document.getElementById('switchCharBtn').addEventListener('click', () => { document.getElementById('menuModal').classList.add('hidden'); showScreen('characterHub'); });
     document.getElementById('newAdventureBtn').addEventListener('click', () => {
         state.chatHistory = []; state.adventure = null;
@@ -991,6 +1006,53 @@ function updateStatus() {
     if (el('locationDisplay')) el('locationDisplay').textContent = state.gameState.location;
     if (el('timeDisplay')) el('timeDisplay').textContent = state.gameState.timeOfDay;
     if (el('inventoryDisplay')) el('inventoryDisplay').textContent = state.gameState.inventory.join(', ')||'Vacío';
+}
+
+function openPartyModal() {
+    const modal = document.getElementById('partyModal');
+    const content = document.getElementById('partyModalContent');
+    if (!modal || !content || !state.character) return;
+    const char = state.character;
+    const hpPct = Math.max(0, Math.min(100, (state.gameState.hp/state.gameState.maxHp)*100));
+    const hpColor = hpPct>60?'#4a7c59':hpPct>30?'#8a6a20':'#7c4a4a';
+    const portraitUrl = getPortraitUrl(char, 200);
+    const curseHtml = state.gameState.curse ? `<div class="curse-badge">🌑 ${state.gameState.curse}</div>` : '';
+    const classLabel = state.gameState.classEvolution || `${char.race} ${char.classe}`;
+    const companionHtml = (state.gameState.companions||[]).map(c => {
+        const cp = Math.max(0,Math.min(100,(c.hp/c.maxHp)*100));
+        const rel = state.gameState.relationships?.[c.name];
+        const relBadge = rel && rel.type !== 'neutral' ? `<span class="rel-badge rel-${rel.type}">${rel.type==='romantic'?'💕':rel.type==='friend'?'🤝':rel.type==='rival'?'⚔️':'👤'} ${rel.type}</span>` : '';
+        const cPortrait = getCompanionPortraitUrl(c, 100);
+        return `<div class="companion-card">
+            <div class="companion-avatar-wrap">
+                <img src="${cPortrait}" class="companion-portrait" alt="${c.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+                <div class="companion-avatar" style="display:none">${c.icon||'👤'}</div>
+            </div>
+            <div class="companion-info">
+                <div class="companion-name">${c.name} ${relBadge}</div>
+                <div class="companion-role">${c.role||''}</div>
+                ${c.description ? `<div class="companion-desc">${c.description}</div>` : ''}
+                <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${cp}%;background:${cp>60?'#4a7c59':cp>30?'#8a6a20':'#7c4a4a'}"></div></div>
+                <div class="hp-text">PV ${c.hp}/${c.maxHp}</div>
+                <button class="companion-chat-btn" onclick="document.getElementById('partyModal').classList.add('hidden');openCompanionChat('${c.name.replace(/'/g,"\'")}')">💬 Hablar</button>
+            </div>
+        </div>`;
+    }).join('');
+    content.innerHTML = `
+        <div style="display:flex;gap:1rem;align-items:flex-start;margin-bottom:1rem">
+            <img src="${portraitUrl}" style="width:80px;height:100px;object-fit:cover;border-radius:6px;flex-shrink:0" loading="lazy" onerror="this.style.display='none'">
+            <div style="flex:1;min-width:0">
+                <div style="font-family:Cinzel,serif;font-size:1rem;color:var(--accent)">${char.name}</div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.4rem">${classLabel}</div>
+                ${curseHtml}
+                <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
+                <div class="hp-text">PV ${state.gameState.hp} / ${state.gameState.maxHp}</div>
+                <div class="stats-mini" style="margin-top:0.5rem">${Object.entries(char.stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `<div class="stat-mini"><span class="stat-label">${ab}</span><span class="stat-val">${v}</span><span class="stat-mod">${m>=0?'+':''}${m}</span></div>`;}).join('')}</div>
+            </div>
+        </div>
+        ${companionHtml ? `<div class="companions-label" style="margin-bottom:0.5rem">Compañeros</div>${companionHtml}` : '<div style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:1rem">Aún no tienes compañeros</div>'}
+    `;
+    modal.classList.remove('hidden');
 }
 
 function updatePartyPanel() {
