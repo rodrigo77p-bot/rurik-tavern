@@ -308,6 +308,7 @@ function renderAdventureSelectionScreen() {
         <h1>Elige tu Aventura</h1>
         <p style="text-align:center;color:var(--text-muted);margin-bottom:1rem;font-size:0.88rem">${state.character?.name} — ${state.character?.race} ${state.character?.classe}</p>
         <div class="adv-grid">${cards}</div>
+        <div style="text-align:center;margin-top:0.75rem"><button class="btn" id="backFromAdvBtn" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);width:auto;padding:0.5rem 1.5rem;font-size:0.82rem">← Volver</button></div>
     </div>`;
 }
 
@@ -450,6 +451,7 @@ function bindCharacterCreation() {
 }
 
 function bindAdventureSelection() {
+    document.getElementById('backFromAdvBtn').addEventListener('click', () => showScreen('characterHub'));
     document.querySelectorAll('.adv-card').forEach(card => {
         card.addEventListener('click', () => {
             const adv = ADVENTURES.find(a => a.id === card.dataset.id);
