@@ -800,15 +800,23 @@ function bindChat() {
         if (rollTrigger) {
             addPlayerMessage(action, null, 'pending', msgIdx);
             state.pendingRoll = { action, trigger: rollTrigger, msgIdx };
-            playerInput.disabled = false; sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; playerInput.focus();
+            playerInput.disabled = false; sendBtn.disabled = false; sendBtn.textContent = 'Enviar';
         } else {
             addPlayerMessage(action, null, 'done', msgIdx);
             await callAndRespond(action, null);
         }
     }
 
-    sendBtn.addEventListener('click', sendMessage);
-    playerInput.addEventListener('keypress', e => { if (e.key==='Enter') sendMessage(); });
+    // Use touchend on mobile for instant response, click as fallback
+    let touchFired = false;
+    sendBtn.addEventListener('touchend', e => {
+        e.preventDefault();
+        touchFired = true;
+        sendMessage();
+        setTimeout(() => { touchFired = false; }, 500);
+    });
+    sendBtn.addEventListener('click', () => { if (!touchFired) sendMessage(); });
+    playerInput.addEventListener('keypress', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
     // Menu
     document.getElementById('menuBtn').addEventListener('click', () => document.getElementById('menuModal').classList.toggle('hidden'));
@@ -1147,7 +1155,8 @@ async function callAndRespond(action, rollResult) {
     if (container) { container.appendChild(typingEl); container.scrollTop = container.scrollHeight; }
 
     try {
-        const response = await callGroqApi(action, rollResult);
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
+        const response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
         const { narration, stateUpdates, actions, legacy, deathNarration } = parseLlmResponse(response);
         document.getElementById('typingIndicator')?.remove();
 
@@ -1184,9 +1193,10 @@ async function callAndRespond(action, rollResult) {
     } catch(err) {
         console.error(err);
         document.getElementById('typingIndicator')?.remove();
-        addDMMessage('El humo de la taberna nubla la visión. Inténtalo de nuevo.', []);
+        const isTimeout = err.message === 'timeout';
+        addDMMessage(isTimeout ? 'La conexión tardó demasiado. Intenta enviar tu acción de nuevo.' : 'El humo de la taberna nubla la visión. Inténtalo de nuevo.', []);
     } finally {
-        if (playerInput) { playerInput.disabled = false; playerInput.focus(); }
+        if (playerInput) { playerInput.disabled = false; }
         if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
     }
 }

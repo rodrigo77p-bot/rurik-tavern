@@ -421,3 +421,4 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
         font-size: 16px !important;
     }
 }
+#sendBtn { touch-action: manipulation; }
