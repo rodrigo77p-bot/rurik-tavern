@@ -42,9 +42,47 @@ async function syncFromFirestore() {
         const dataDoc = await fbDb.doc(`users/${uid}/data/main`).get();
         if (dataDoc.exists) {
             const d = dataDoc.data();
-            if (d.characters) localStorage.setItem('dndCharacters', JSON.stringify(d.characters));
-            if (d.worldState) localStorage.setItem('dndWorldState', JSON.stringify(d.worldState));
+            // Merge: combine Firestore chars + local chars, avoiding duplicates by id
+            const fsChars = d.characters || [];
+            const localChars = getAllCharacters();
+            if (fsChars.length > 0) {
+                const merged = [...fsChars];
+                for (const lc of localChars) {
+                    if (!merged.find(c => c.id === lc.id)) merged.push(lc);
+                }
+                localStorage.setItem('dndCharacters', JSON.stringify(merged));
+            }
+            if (d.worldState) {
+                // Merge world events too
+                const fsWs = d.worldState;
+                const localWs = getWorldState();
+                const allEvents = [...(fsWs.events||[])];
+                for (const ev of (localWs.events||[])) {
+                    if (!allEvents.find(e => e.id === ev.id)) allEvents.push(ev);
+                }
+                localStorage.setItem('dndWorldState', JSON.stringify({ events: allEvents }));
+            }
+        } else {
+            // Firestore empty — push all local data up
+            const localChars = getAllCharacters();
+            if (localChars.length > 0) {
+                await fbDb.doc(`users/${uid}/data/main`).set({
+                    characters: localChars,
+                    worldState: getWorldState(),
+                    updatedAt: new Date().toISOString()
+                });
+                // Push each character's game data
+                for (const char of localChars) {
+                    const gs = getGameState(char.id);
+                    if (gs) await fbDb.doc(`users/${uid}/gameStates/${char.id}`).set(gs);
+                    const adv = getAdventure(char.id);
+                    if (adv) await fbDb.doc(`users/${uid}/adventures/${char.id}`).set(adv);
+                    const ch = getChatHistory(char.id);
+                    if (ch.length) await fbDb.doc(`users/${uid}/chatHistory/${char.id}`).set({ messages: ch });
+                }
+            }
         }
+        // Pull per-character data from Firestore
         const chars = getAllCharacters();
         for (const char of chars) {
             const gsDoc = await fbDb.doc(`users/${uid}/gameStates/${char.id}`).get();
