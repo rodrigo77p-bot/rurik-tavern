@@ -860,6 +860,8 @@ function renderNpcModalContent() {
                     <div class="npc-name">${npc.name}</div>
                     <div class="npc-subt">${[npc.race,npc.role].filter(Boolean).join(' · ')}</div>
                     <div class="npc-rel-badge" style="background:${tier.color}22;border:1px solid ${tier.color};color:${tier.color}">${tier.emoji} ${tier.label}</div>
+                    ${(npc.maxRelationship !== undefined && npc.maxRelationship < 5) ? `<div class="npc-cap-label">techo: ${getNpcRelTier(npc.maxRelationship).emoji} ${getNpcRelTier(npc.maxRelationship).label}</div>` : ''}
+                    ${npc.biases && npc.biases.length ? `<div class="npc-biases">${npc.biases.join(' · ')}</div>` : ''}
                     ${npc.lastSeen ? `<div class="npc-lastseen">Visto en: ${npc.lastSeen}</div>` : ''}
                 </div>
                 <div class="npc-card-actions">
@@ -1356,7 +1358,10 @@ function buildPrompt(playerAction, rollResult) {
         const tier = getNpcRelTier(n.relationship);
         const facts = n.knownFacts.slice(-3).join('; ');
         const lastEvent = [...(n.goodMemories||[]),...(n.badMemories||[])].slice(-1)[0]||'';
-        return `- ${n.name} (${n.race||''}${n.role?' · '+n.role:''}): REL=${tier.label}. ${facts}${lastEvent?' | Último: '+lastEvent:''}`;
+        const capStr = n.maxRelationship !== undefined && n.maxRelationship < 5 ? ` [TECHO:${getNpcRelTier(n.maxRelationship).label}]` : '';
+        const biasStr = n.biases && n.biases.length ? ` [Sesgos: ${n.biases.join(', ')}]` : '';
+        const persStr = n.personality ? ` [Personalidad: ${n.personality}]` : '';
+        return `- ${n.name} (${n.race||''}${n.role?' · '+n.role:''}): REL=${tier.label}${capStr}${biasStr}${persStr}. ${facts}${lastEvent?' | Último: '+lastEvent:''}`;
     }).join('\n') : '';
     const curseNote = state.gameState.curse ? `\nMALDICIÓN ACTIVA: ${state.gameState.curse}` : '';
     const classLabel = state.gameState.classEvolution ? `${char.classe} (evolucionando: ${state.gameState.classEvolution})` : char.classe;
@@ -1415,9 +1420,11 @@ Si el resultado es incierto AÑADE TAMBIÉN:
 Si ocurre algo épico o permanente:
 [LEGACY: {"location":"nombre exacto","event":"descripción en tercera persona","type":"death/heroic/curse/discovery"}]
 Cuando interactúas con un PNJ con nombre, actualiza su registro (usa SOLO si hay algo nuevo o cambia la relación):
-[NPC: {"name":"Nombre","race":"Raza","role":"Rol/ocupación","gender":"hombre|mujer","relationship":0,"relationshipLabel":"Neutro","fact":"dato que el jugador descubre","goodMemory":"evento positivo","badMemory":"evento negativo","lastSeen":"lugar actual","portraitHint":"rasgos visuales breves"}]
+[NPC: {"name":"Nombre","race":"Raza","role":"Rol/ocupación","gender":"hombre|mujer","personality":"rasgos de personalidad en 5-8 palabras","biases":["odio o preferencia 1","odio o preferencia 2"],"maxRelationship":5,"relationship":0,"fact":"dato que el jugador descubre","goodMemory":"evento positivo","badMemory":"evento negativo","lastSeen":"lugar actual","portraitHint":"rasgos visuales breves"}]
 Escala relación: -3=Enemigo Jurado, -2=Enemigo, -1=Rival, 0=Neutro, 1=Conocido, 2=Amigo, 3=Aliado, 4=Interés Romántico, 5=Amor
-Incluye solo los campos que cambian. NUNCA incluyas [NPC] si no hay personaje nombrado significativo.`;
+maxRelationship: el TECHO PERMANENTE de relación con este jugador específico. Si el PNJ es racista, leal a una facción enemiga, o tiene razones para no confiar nunca del todo, reduce este valor. Ejemplos: guardia corrupto que odia elfos → maxRelationship:1. Mercenario desconfiado → 3. Una vez fijado NO cambia.
+REGLA CRÍTICA: la relación NUNCA puede mejorar solo porque el jugador sea amable. Debe haber acción concreta que justifique el cambio. Un PNJ con biases negativos resiste activamente el carisma del jugador.
+Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo al crear el PNJ. NUNCA incluyas [NPC] si no hay personaje nombrado significativo.`;
 
     return { system, user: playerAction };
 }
@@ -1472,8 +1479,9 @@ function processNpcUpdate(update) {
     const existing = state.gameState.npcs.find(n => n.name.toLowerCase() === update.name.toLowerCase());
     if (existing) {
         if (update.relationship !== undefined) {
-            existing.relationship = update.relationship;
-            existing.relationshipLabel = update.relationshipLabel || getNpcRelTier(update.relationship).label;
+            const cap = existing.maxRelationship !== undefined ? existing.maxRelationship : 5;
+            existing.relationship = Math.min(cap, Math.max(-3, update.relationship));
+            existing.relationshipLabel = getNpcRelTier(existing.relationship).label;
         }
         if (update.fact && !existing.knownFacts.includes(update.fact)) existing.knownFacts.push(update.fact);
         if (update.goodMemory && !existing.goodMemories.includes(update.goodMemory)) existing.goodMemories.push(update.goodMemory);

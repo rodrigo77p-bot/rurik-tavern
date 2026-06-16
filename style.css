@@ -560,3 +560,16 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
     margin-top: 0.4rem;
     box-sizing: border-box;
 }
+
+.npc-cap-label {
+    font-size: 0.68rem;
+    color: #e67e22;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.npc-biases {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-style: italic;
+    line-height: 1.4;
+}
