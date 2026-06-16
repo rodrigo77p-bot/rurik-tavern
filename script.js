@@ -427,7 +427,6 @@ function renderCharacterHub() {
                 <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
                 <div class="char-adv">${adv ? adv.title : 'Sin aventura'} · ${history.length} turnos</div>`}
             </div>
-        </div>
             <button class="char-delete-btn" data-id="${c.id}" title="Eliminar personaje">🗑️</button>
         </div>`;
     }).join('');
