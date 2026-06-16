@@ -234,7 +234,7 @@ const state = {
     gameState: {
         location:'Taberna de Rurik', timeOfDay:'Tarde',
         hp:0, maxHp:0, inventory:[], quest:'', summary:'',
-        companions:[], relationships:{},
+        companions:[], relationships:{}, npcs:[],
         skillUses:{ combat:0, magic:0, stealth:0, social:0, nature:0 },
         classEvolution:'', curse:''
     },
@@ -516,6 +516,7 @@ function renderChatScreen() {
         <div id="menuModal" class="modal hidden"><div class="modal-box">
             <div class="modal-title">Menú — ${state.character?.name}</div>
             <button class="modal-btn" id="partyMenuBtn">👥 Party & Compañeros</button>
+            <button class="modal-btn" id="npcMenuBtn">🎭 Personajes Conocidos</button>
             <button class="modal-btn" id="newAdventureBtn">🗺️ Nueva Aventura (mismo personaje)</button>
             <button class="modal-btn" id="switchCharBtn">🔄 Cambiar Personaje</button>
             <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
@@ -565,6 +566,13 @@ function renderChatScreen() {
                 <div class="modal-title">👥 Party</div>
                 <div id="partyModalContent"></div>
                 <button class="modal-btn" id="closePartyModalBtn" style="margin-top:0.5rem">✕ Cerrar</button>
+            </div>
+        </div>
+        <div id="npcModal" class="modal hidden">
+            <div class="modal-box npc-modal-box">
+                <div class="modal-title">🎭 Personajes Conocidos</div>
+                <div id="npcModalContent"></div>
+                <button class="modal-btn" id="closeNpcModalBtn" style="margin-top:0.5rem">✕ Cerrar</button>
             </div>
         </div>
         <div class="game-layout">
@@ -800,7 +808,7 @@ function bindCharacterCreation() {
         state.activeCharId = id;
         setActiveCharId(id);
         state.character = char;
-        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'' };
+        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'' };
         Object.assign(state.gameState, gs);
         state.chatHistory = [];
         state.adventure = null;
@@ -830,6 +838,79 @@ function bindAdventureSelection() {
         });
     });
 }
+
+function renderNpcModalContent() {
+    const container = document.getElementById('npcModalContent');
+    if (!container) return;
+    const npcs = state.gameState.npcs || [];
+    if (npcs.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-muted);text-align:center;font-size:0.85rem;padding:1rem">Todavia no has conocido a nadie reseniable.<br>Los personajes importantes apareceran aqui automaticamente.</p>';
+        return;
+    }
+    container.innerHTML = npcs.map((npc, idx) => {
+        const tier = getNpcRelTier(npc.relationship);
+        const facts = (npc.knownFacts||[]).map(f=>`<li>${f}</li>`).join('');
+        const good  = (npc.goodMemories||[]).map(f=>`<li>${f}</li>`).join('');
+        const bad   = (npc.badMemories||[]).map(f=>`<li>${f}</li>`).join('');
+        const portraitSrc = npc.portrait || '';
+        return `<div class="npc-card" id="npc-card-${idx}">
+            <div class="npc-card-header">
+                ${portraitSrc ? `<img class="npc-portrait" src="${portraitSrc}" loading="lazy">` : '<div class="npc-portrait npc-portrait-placeholder">?</div>'}
+                <div class="npc-card-info">
+                    <div class="npc-name">${npc.name}</div>
+                    <div class="npc-subt">${[npc.race,npc.role].filter(Boolean).join(' · ')}</div>
+                    <div class="npc-rel-badge" style="background:${tier.color}22;border:1px solid ${tier.color};color:${tier.color}">${tier.emoji} ${tier.label}</div>
+                    ${npc.lastSeen ? `<div class="npc-lastseen">Visto en: ${npc.lastSeen}</div>` : ''}
+                </div>
+                <div class="npc-card-actions">
+                    <button class="npc-btn" title="Regenerar retrato" onclick="regenNpcPortrait(${idx})">&#128260;</button>
+                    <button class="npc-btn npc-rel-up" title="Mejorar relacion" onclick="adjustNpcRel(${idx},1)">+</button>
+                    <button class="npc-btn npc-rel-dn" title="Empeorar relacion" onclick="adjustNpcRel(${idx},-1)">-</button>
+                    <button class="npc-btn npc-del" title="Eliminar" onclick="deleteNpc(${idx})">&#128465;</button>
+                </div>
+            </div>
+            ${facts ? `<details class="npc-section"><summary>Lo que sabes</summary><ul class="npc-list">${facts}</ul></details>` : ''}
+            ${good  ? `<details class="npc-section"><summary>Buenos recuerdos</summary><ul class="npc-list">${good}</ul></details>` : ''}
+            ${bad   ? `<details class="npc-section"><summary>Conflictos</summary><ul class="npc-list">${bad}</ul></details>` : ''}
+            <details class="npc-section"><summary>Notas libres</summary>
+                <textarea class="npc-notes-input" placeholder="Notas sobre ${npc.name}..." oninput="saveNpcNotes(${idx},this.value)">${npc.notes||''}</textarea>
+            </details>
+        </div>`;
+    }).join('');
+}
+
+function openNpcModal() {
+    renderNpcModalContent();
+    document.getElementById('npcModal').classList.remove('hidden');
+}
+
+window.adjustNpcRel = function(idx, delta) {
+    const npc = state.gameState.npcs[idx];
+    if (!npc) return;
+    npc.relationship = Math.max(-3, Math.min(5, npc.relationship + delta));
+    npc.relationshipLabel = getNpcRelTier(npc.relationship).label;
+    fsSaveGameState(state.activeCharId);
+    renderNpcModalContent();
+};
+
+window.regenNpcPortrait = function(idx) {
+    const npc = state.gameState.npcs[idx];
+    if (!npc) return;
+    npc.portrait = null;
+    generateNpcPortrait(npc);
+};
+
+window.deleteNpc = function(idx) {
+    if (!confirm('Eliminar este personaje del registro?')) return;
+    state.gameState.npcs.splice(idx, 1);
+    fsSaveGameState(state.activeCharId);
+    renderNpcModalContent();
+};
+
+window.saveNpcNotes = function(idx, text) {
+    if (state.gameState.npcs[idx]) { state.gameState.npcs[idx].notes = text; fsSaveGameState(state.activeCharId); }
+};
+
 
 function bindChat() {
     const playerInput = document.getElementById('playerInput');
@@ -872,6 +953,13 @@ function bindChat() {
     });
     document.getElementById('closePartyModalBtn').addEventListener('click', () => {
         document.getElementById('partyModal').classList.add('hidden');
+    });
+    document.getElementById('npcMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden');
+        openNpcModal();
+    });
+    document.getElementById('closeNpcModalBtn').addEventListener('click', () => {
+        document.getElementById('npcModal').classList.add('hidden');
     });
     document.getElementById('switchCharBtn').addEventListener('click', () => { document.getElementById('menuModal').classList.add('hidden'); showScreen('characterHub'); });
     document.getElementById('newAdventureBtn').addEventListener('click', () => {
@@ -1196,7 +1284,8 @@ async function callAndRespond(action, rollResult) {
     try {
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
         const response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
-        const { narration, stateUpdates, actions, legacy, deathNarration, rollRequest } = parseLlmResponse(response);
+        const { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate } = parseLlmResponse(response);
+        if (npcUpdate) processNpcUpdate(npcUpdate);
         document.getElementById('typingIndicator')?.remove();
 
         if (stateUpdates) {
@@ -1264,6 +1353,13 @@ function buildPrompt(playerAction, rollResult) {
     const worldSection = worldEvents.length > 0 ? `\nHISTORIA DEL MUNDO EN ESTA ZONA:\n${worldEvents.map(e=>`- ${e.event}`).join('\n')}` : '';
     const companions = (state.gameState.companions||[]).map(c=>`- ${c.name} (${c.role||'aliado'}, PV ${c.hp}/${c.maxHp})`).join('\n')||'ninguno';
     const rels = Object.entries(state.gameState.relationships||{}).map(([k,v])=>`- ${k}: ${v.type} (nivel ${v.level}/5)`).join('\n')||'ninguna';
+    const npcs = (state.gameState.npcs||[]);
+    const npcSection = npcs.length > 0 ? '\nPERSONAJES CONOCIDOS:\n' + npcs.map(n=>{
+        const tier = getNpcRelTier(n.relationship);
+        const facts = n.knownFacts.slice(-3).join('; ');
+        const lastEvent = [...(n.goodMemories||[]),...(n.badMemories||[])].slice(-1)[0]||'';
+        return `- ${n.name} (${n.race||''}${n.role?' · '+n.role:''}): REL=${tier.label}. ${facts}${lastEvent?' | Último: '+lastEvent:''}`;
+    }).join('\n') : '';
     const curseNote = state.gameState.curse ? `\nMALDICIÓN ACTIVA: ${state.gameState.curse}` : '';
     const classLabel = state.gameState.classEvolution ? `${char.classe} (evolucionando: ${state.gameState.classEvolution})` : char.classe;
 
@@ -1281,7 +1377,7 @@ ESTADO:
 - Misión: ${state.gameState.quest}
 - Contexto: ${state.gameState.summary||'inicio'}
 - Compañeros: ${companions}
-- Relaciones: ${rels}
+- Relaciones: ${rels}${npcSection}
 ${worldSection}${rollSection}
 
 INSTRUCCIONES:
@@ -1319,7 +1415,11 @@ Al final, en ESTE ORDEN exacto:
 Si el resultado es incierto AÑADE TAMBIÉN:
 [ROLL: {"skill":"Nombre del skill","stat":"FUE|DES|CON|INT|SAB|CAR","dc":N,"reason":"por qué se pide la tirada"}]
 Si ocurre algo épico o permanente:
-[LEGACY: {"location":"nombre exacto","event":"descripción en tercera persona","type":"death/heroic/curse/discovery"}]`;
+[LEGACY: {"location":"nombre exacto","event":"descripción en tercera persona","type":"death/heroic/curse/discovery"}]
+Cuando interactúas con un PNJ con nombre, actualiza su registro (usa SOLO si hay algo nuevo o cambia la relación):
+[NPC: {"name":"Nombre","race":"Raza","role":"Rol/ocupación","gender":"hombre|mujer","relationship":0,"relationshipLabel":"Neutro","fact":"dato que el jugador descubre","goodMemory":"evento positivo","badMemory":"evento negativo","lastSeen":"lugar actual","portraitHint":"rasgos visuales breves"}]
+Escala relación: -3=Enemigo Jurado, -2=Enemigo, -1=Rival, 0=Neutro, 1=Conocido, 2=Amigo, 3=Aliado, 4=Interés Romántico, 5=Amor
+Incluye solo los campos que cambian. NUNCA incluyas [NPC] si no hay personaje nombrado significativo.`;
 
     return { system, user: playerAction };
 }
@@ -1334,6 +1434,81 @@ async function callGroqApi(playerAction, rollResult) {
     if (!response.ok) { const e = await response.text(); throw new Error(`Groq ${response.status}: ${e}`); }
     const data = await response.json();
     return data.choices[0].message.content;
+}
+
+
+// ===================== NPC SYSTEM =====================
+const NPC_REL_TIERS = [
+    { value:-3, label:'Enemigo Jurado', color:'#8b0000', emoji:'💀' },
+    { value:-2, label:'Enemigo',        color:'#c0392b', emoji:'⚔️' },
+    { value:-1, label:'Rival',          color:'#e67e22', emoji:'😠' },
+    { value:0,  label:'Neutro',         color:'#7f8c8d', emoji:'😐' },
+    { value:1,  label:'Conocido',       color:'#2980b9', emoji:'👋' },
+    { value:2,  label:'Amigo',          color:'#27ae60', emoji:'🤝' },
+    { value:3,  label:'Aliado',         color:'#1abc9c', emoji:'🛡️' },
+    { value:4,  label:'Interés Romántico', color:'#e91e8c', emoji:'💕' },
+    { value:5,  label:'Amor',           color:'#ff4081', emoji:'❤️' }
+];
+
+function getNpcRelTier(value) {
+    return NPC_REL_TIERS.find(t => t.value === value) || NPC_REL_TIERS[3];
+}
+
+async function generateNpcPortrait(npc) {
+    const raceHint = npc.race ? npc.race.toLowerCase() : 'human';
+    const genderHint = npc.gender || '';
+    const visualHint = npc.portraitHint || npc.role || '';
+    const prompt = encodeURIComponent(`${genderHint} ${raceHint} ${visualHint}, semi-realistic digital painting, D&D NPC character portrait, artstation quality, dramatic lighting, fantasy, detailed face`);
+    const url = `https://image.pollinations.ai/prompt/${prompt}?width=256&height=256&seed=${Math.floor(Math.random()*9999)}&nologo=true`;
+    npc.portrait = url;
+    fsSaveGameState(state.activeCharId);
+    // Refresh NPC panel if open
+    const panel = document.getElementById('npcModalContent');
+    if (panel) renderNpcModalContent();
+}
+
+function processNpcUpdate(update) {
+    if (!update || !update.name) return;
+    if (!state.gameState.npcs) state.gameState.npcs = [];
+
+    const existing = state.gameState.npcs.find(n => n.name.toLowerCase() === update.name.toLowerCase());
+    if (existing) {
+        if (update.relationship !== undefined) {
+            existing.relationship = update.relationship;
+            existing.relationshipLabel = update.relationshipLabel || getNpcRelTier(update.relationship).label;
+        }
+        if (update.fact && !existing.knownFacts.includes(update.fact)) existing.knownFacts.push(update.fact);
+        if (update.goodMemory && !existing.goodMemories.includes(update.goodMemory)) existing.goodMemories.push(update.goodMemory);
+        if (update.badMemory && !existing.badMemories.includes(update.badMemory)) existing.badMemories.push(update.badMemory);
+        if (update.race && !existing.race) existing.race = update.race;
+        if (update.role && !existing.role) existing.role = update.role;
+        if (update.lastSeen) existing.lastSeen = update.lastSeen || state.gameState.location;
+        if (update.portraitHint && !existing.portraitHint) { existing.portraitHint = update.portraitHint; generateNpcPortrait(existing); }
+    } else {
+        const tier = NPC_REL_TIERS.find(t => t.value === (update.relationship||0)) || NPC_REL_TIERS[3];
+        const npc = {
+            id: update.name.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now(),
+            name: update.name,
+            race: update.race || '',
+            role: update.role || '',
+            gender: update.gender || '',
+            portrait: null,
+            portraitHint: update.portraitHint || '',
+            relationship: update.relationship !== undefined ? update.relationship : 0,
+            relationshipLabel: update.relationshipLabel || tier.label,
+            knownFacts: update.fact ? [update.fact] : [],
+            goodMemories: update.goodMemory ? [update.goodMemory] : [],
+            badMemories: update.badMemory ? [update.badMemory] : [],
+            lastSeen: update.lastSeen || state.gameState.location || '',
+            notes: update.notes || ''
+        };
+        state.gameState.npcs.push(npc);
+        generateNpcPortrait(npc);
+    }
+    fsSaveGameState(state.activeCharId);
+    // Live-refresh if panel open
+    const panel = document.getElementById('npcModalContent');
+    if (panel) renderNpcModalContent();
 }
 
 function parseLlmResponse(response) {
@@ -1367,7 +1542,14 @@ function parseLlmResponse(response) {
         deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200);
     }
 
-    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest };
+    const npcMatch = response.match(/\[NPC:\s*(\{[\s\S]*?\})\]/);
+    let npcUpdate = null;
+    if (npcMatch) {
+        try { npcUpdate = JSON.parse(npcMatch[1]); } catch(e) {}
+        narration = narration.replace(npcMatch[0],'').trim();
+    }
+
+    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate };
 }
 
 async function summarizeContext() {
