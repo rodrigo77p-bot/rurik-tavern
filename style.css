@@ -327,17 +327,18 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
     position: absolute;
     top: 0.45rem;
     right: 0.45rem;
-    background: none;
-    border: none;
+    background: rgba(180,40,40,0.18);
+    border: 1px solid rgba(180,40,40,0.4);
+    border-radius: 6px;
     font-size: 0.8rem;
     cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s;
-    padding: 0.1rem;
+    opacity: 1;
+    padding: 0.25rem 0.4rem;
     line-height: 1;
+    color: #e07070;
+    transition: background 0.15s;
 }
-.char-card:hover .char-delete-btn { opacity: 0.6; }
-.char-delete-btn:hover { opacity: 1 !important; }
+.char-delete-btn:hover { background: rgba(180,40,40,0.45); }
 
 /* ---- COMPANION DESCRIPTIONS & RELATIONS ---- */
 .companion-desc {
