@@ -208,22 +208,16 @@ const state = {
 const appDiv = document.getElementById('app');
 
 // ===================== ROLL SYSTEM =====================
-const ROLL_TRIGGERS = [
-    { keywords:['persuad','convenc','engañ','negoci','seduc','enamor','coquete','flirte','charm'], skill:'Carisma', stat:'CAR', dc:12 },
-    { keywords:['busca','observa','invest','inspect','percib','detect','examin','estudia','analiz','registra','espía'], skill:'Investigación', stat:'SAB', dc:10 },
-    { keywords:['atac','golpe','dispara','lucha','combat','corta','apuñal','hiero','golpeo','pelea'], skill:'Ataque', stat:'FUE', dc:12 },
-    { keywords:['escond','sigilo','escapa','trepa','salta','esquiv','infiltr'], skill:'Sigilo', stat:'DES', dc:11 },
-    { keywords:['recuerd','identific','comprend','descifr','sabe sobre','conoce','historia de'], skill:'Conocimiento', stat:'INT', dc:11 },
-    { keywords:['intimid','amenaz','asus'], skill:'Intimidación', stat:'CAR', dc:13 },
-    { keywords:['cura','sana','medic','venda'], skill:'Medicina', stat:'SAB', dc:10 },
-    { keywords:['roba','hurta','carterist'], skill:'Hurto', stat:'DES', dc:13 },
-    { keywords:['lanza','conjura','hechiz','magia','encanta','invoca'], skill:'Magia', stat:'INT', dc:12 },
-];
-
-function detectRoll(action) {
-    const lower = action.toLowerCase();
-    for (const t of ROLL_TRIGGERS) { if (t.keywords.some(kw => lower.includes(kw))) return t; }
-    return null;
+function guessStatFromSkill(skill) {
+    const map = {
+        'Persuasión':'CAR','Carisma':'CAR','Engaño':'CAR','Intimidación':'CAR','Seducción':'CAR','Actuación':'CAR',
+        'Sigilo':'DES','Acrobacias':'DES','Hurto':'DES','Destreza':'DES',
+        'Fuerza':'FUE','Atletismo':'FUE','Ataque':'FUE','Combate':'FUE',
+        'Magia':'INT','Arcanos':'INT','Historia':'INT','Investigación':'INT','Conocimiento':'INT',
+        'Percepción':'SAB','Medicina':'SAB','Naturaleza':'SAB','Supervivencia':'SAB','Intuición':'SAB',
+        'Constitución':'CON','Resistencia':'CON'
+    };
+    return map[skill] || 'DES';
 }
 function rollD20(statValue, dc) {
     const roll = Math.floor(Math.random()*20)+1;
@@ -232,23 +226,38 @@ function rollD20(statValue, dc) {
     return { roll, mod, total, dc, success: total>=dc };
 }
 
-window.executeRoll = async function(msgIdx) {
+window.executeRoll = async function(dmMsgIdx) {
     if (!state.pendingRoll) return;
-    const { action, trigger } = state.pendingRoll;
+    const { trigger } = state.pendingRoll;
     state.pendingRoll = null;
     const statVal = state.character.stats[trigger.stat] || 10;
     const result = { ...rollD20(statVal, trigger.dc), skill: trigger.skill };
-    if (trigger.skill === 'Ataque') state.gameState.skillUses.combat++;
-    else if (trigger.skill === 'Magia') state.gameState.skillUses.magic++;
-    else if (['Sigilo','Hurto'].includes(trigger.skill)) state.gameState.skillUses.stealth++;
-    else if (['Carisma','Intimidación'].includes(trigger.skill)) state.gameState.skillUses.social++;
+
+    // Track skill usage
+    if (['Ataque','Combate','Fuerza','Atletismo'].includes(trigger.skill)) state.gameState.skillUses.combat++;
+    else if (['Magia','Arcanos'].includes(trigger.skill)) state.gameState.skillUses.magic++;
+    else if (['Sigilo','Hurto','Acrobacias'].includes(trigger.skill)) state.gameState.skillUses.stealth++;
+    else if (['Persuasión','Carisma','Intimidación','Engaño','Seducción'].includes(trigger.skill)) state.gameState.skillUses.social++;
+    else if (['Naturaleza','Medicina','Supervivencia'].includes(trigger.skill)) state.gameState.skillUses.nature++;
     updateClassEvolution();
-    state.chatHistory[msgIdx].roll = result;
-    state.chatHistory[msgIdx].rollState = 'done';
-    const container = document.getElementById('chatContainer');
-    const existing = container.querySelector(`[data-idx="${msgIdx}"]`);
-    if (existing) existing.replaceWith(createMessageEl(state.chatHistory[msgIdx], msgIdx));
-    await callAndRespond(action, result);
+
+    // Update DM message to show roll result inline
+    if (state.chatHistory[dmMsgIdx]) {
+        state.chatHistory[dmMsgIdx].rollResult = result;
+        state.chatHistory[dmMsgIdx].rollPending = false;
+        const container = document.getElementById('chatContainer');
+        const existing = container?.querySelector(`[data-idx="${dmMsgIdx}"]`);
+        if (existing) existing.replaceWith(createMessageEl(state.chatHistory[dmMsgIdx], dmMsgIdx));
+    }
+
+    // Auto-send roll result to AI for outcome narration
+    const mod = result.mod >= 0 ? '+'+result.mod : result.mod;
+    const rollMsg = `[Tirada de ${trigger.skill}: d20=${result.roll} ${mod} = ${result.total} vs DC ${trigger.dc} → ${result.success ? '¡ÉXITO!' : 'FALLO'}]`;
+    const playerInput = document.getElementById('playerInput');
+    const sendBtn = document.getElementById('sendBtn');
+    if (playerInput) playerInput.disabled = true;
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '...'; }
+    await callAndRespond(rollMsg, result);
 };
 
 function updateClassEvolution() {
@@ -1157,7 +1166,7 @@ async function callAndRespond(action, rollResult) {
     try {
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
         const response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
-        const { narration, stateUpdates, actions, legacy, deathNarration } = parseLlmResponse(response);
+        const { narration, stateUpdates, actions, legacy, deathNarration, rollRequest } = parseLlmResponse(response);
         document.getElementById('typingIndicator')?.remove();
 
         if (stateUpdates) {
@@ -1168,7 +1177,17 @@ async function callAndRespond(action, rollResult) {
 
         if (legacy) saveWorldEvent({ ...legacy, characterName: state.character.name, characterRace: state.character.race, characterClass: state.character.classe });
 
-        addDMMessage(narration, actions);
+        // If AI requests a roll, mark the DM message and set pendingRoll
+        if (rollRequest) {
+            const dmMsgIdx = state.chatHistory.length;
+            const dmMsg = { role:'dm', content:narration, actions:[], location:state.gameState.location, time:state.gameState.timeOfDay, rollPending:true };
+            state.chatHistory.push(dmMsg);
+            state.pendingRoll = { trigger: rollRequest };
+            const container = document.getElementById('chatContainer');
+            if (container) { container.appendChild(createMessageEl(dmMsg, dmMsgIdx)); container.scrollTop = container.scrollHeight; }
+        } else {
+            addDMMessage(narration, actions);
+        }
         updateStatus(); updatePartyPanel();
 
         // Check for death
@@ -1236,18 +1255,41 @@ ESTADO:
 ${worldSection}${rollSection}
 
 INSTRUCCIONES:
-- 150-350 palabras, prosa rica con detalles sensoriales.
-- NPCs con nombres y personalidad consistente. Los eventos del mundo son REALES y visibles (estatuas, tumbas, ruinas de batallas anteriores).
-- Si hay historia del mundo en esta zona, inclúyela naturalmente en la narración (el personaje puede ver, tocar o preguntar sobre esos vestigios).
+- 100-250 palabras de narración, prosa rica con detalles sensoriales.
+- NPCs con nombres y personalidad consistente. Los eventos del mundo son REALES y visibles.
+- Si hay historia del mundo en esta zona, inclúyela naturalmente.
 - Romance, seducción y relaciones pueden desarrollarse naturalmente.
-- Si el jugador muere (hp=0), narra una muerte épica. Si hay una maldición significativa, descríbela.
-- Termina en momento de decisión.
+- Si el jugador muere (hp=0), narra una muerte épica.
+- Termina en momento de decisión o antes del bloque de tirada.
+
+SISTEMA DE DADOS (CRÍTICO — SIGUE ESTO SIEMPRE):
+CASI TODA acción requiere tirada. Pide [ROLL] SIEMPRE en estos casos:
+- Hablar con alguien con intención (convencer, seducir, intimidar, mentir, pedir favor, flirtear) → CAR
+- Atacar, pelear, golpear, disparar → FUE (o DES si es a distancia/sigilo)
+- Esconderse, moverse sin ser visto, robar → DES  
+- Lanzar magia, hechizos, conjuros → INT
+- Buscar algo, investigar, examinar → SAB o INT
+- Percibir peligro, intuir mentiras, detectar algo → SAB
+- Saltar, trepar, correr, forzar → FUE o DES
+- Resistir veneno/dolor/miedo → CON
+- Recordar lore, descifrar, identificar → INT
+- Curar, atender heridas → SAB
+
+NO necesita tirada: moverse de A a B sin obstáculos, describir pensamientos, acciones puramente pasivas, o cuando ya recibes el resultado de una tirada ([Tirada de X: ...]).
+
+En COMBATE: el [ROLL] es OBLIGATORIO siempre. Calcula el daño solo DESPUÉS de recibir el resultado.
+
+DC orientativos: trivial=6, fácil=8, normal=10, moderado=12, difícil=15, muy difícil=18, legendario=20
+
+Stats: FUE(Fuerza/Ataque/Atletismo), DES(Sigilo/Hurto/Acrobacias/Armas a distancia), CON(Resistencia/Aguante), INT(Magia/Arcanos/Conocimiento/Descifrar), SAB(Percepción/Medicina/Naturaleza/Intuición), CAR(Persuasión/Engaño/Intimidación/Seducción/Actuación)
 
 Al final, en ESTE ORDEN exacto:
 [ACTIONS: ["acción 1", "acción 2", "acción 3"]]
 [STATE: {"hp":N,"location":"X","timeOfDay":"X","inventory":[],"quest":"X","summary":"2 frases","companions":[],"relationships":{},"curse":""}]
-Si ocurre algo épico o permanente (muerte heroica, maldición, derrota de monstruo mayor, descubrimiento importante):
-[LEGACY: {"location":"nombre exacto","event":"descripción en tercera persona de qué ocurrió y qué quedó en el lugar","type":"death/heroic/curse/discovery"}]`;
+Si el resultado es incierto AÑADE TAMBIÉN:
+[ROLL: {"skill":"Nombre del skill","stat":"FUE|DES|CON|INT|SAB|CAR","dc":N,"reason":"por qué se pide la tirada"}]
+Si ocurre algo épico o permanente:
+[LEGACY: {"location":"nombre exacto","event":"descripción en tercera persona","type":"death/heroic/curse/discovery"}]`;
 
     return { system, user: playerAction };
 }
@@ -1266,7 +1308,7 @@ async function callGroqApi(playerAction, rollResult) {
 
 function parseLlmResponse(response) {
     let narration = response;
-    let stateUpdates = null, actions = [], legacy = null, deathNarration = null;
+    let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
     const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\])\]/);
     if (actionsMatch) { try { actions = JSON.parse(actionsMatch[1]); } catch(e) {} narration = narration.replace(actionsMatch[0],'').trim(); }
@@ -1277,11 +1319,25 @@ function parseLlmResponse(response) {
     const legacyMatch = response.match(/\[LEGACY:\s*(\{[\s\S]*?\})\]/);
     if (legacyMatch) { try { legacy = JSON.parse(legacyMatch[1]); } catch(e) {} narration = narration.replace(legacyMatch[0],'').trim(); }
 
+    const rollMatch = response.match(/\[ROLL:\s*(\{[\s\S]*?\})\]/);
+    if (rollMatch) {
+        try {
+            const r = JSON.parse(rollMatch[1]);
+            rollRequest = {
+                skill: r.skill || 'Habilidad',
+                stat: r.stat || guessStatFromSkill(r.skill || ''),
+                dc: parseInt(r.dc) || 12,
+                reason: r.reason || ''
+            };
+        } catch(e) {}
+        narration = narration.replace(rollMatch[0],'').trim();
+    }
+
     if (stateUpdates?.hp <= 0) {
         deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200);
     }
 
-    return { narration, stateUpdates, actions, legacy, deathNarration };
+    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest };
 }
 
 async function summarizeContext() {
