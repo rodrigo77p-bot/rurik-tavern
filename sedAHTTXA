@@ -1,0 +1,481 @@
+// State
+const state = {
+    apiKey: null,
+    character: null,
+    gameState: {
+        location: "Taberna de Rurik",
+        hp: 0,
+        maxHp: 0,
+        inventory: [],
+        quest: "Descubrir los secretos de la taberna",
+        summary: ""
+    },
+    chatHistory: [], // array of {role: 'dm'|'player', content: string}
+    turnCount: 0
+};
+
+// DOM elements
+const appDiv = document.getElementById('app');
+
+// Initialize
+function init() {
+    // Load from localStorage
+    const savedApiKey = localStorage.getItem('groqApiKey');
+    if (savedApiKey) {
+        state.apiKey = savedApiKey;
+    }
+    const savedChar = localStorage.getItem('dndCharacter');
+    if (savedChar) {
+        try {
+            state.character = JSON.parse(savedChar);
+        } catch(e) {}
+    }
+    const savedGame = localStorage.getItem('dndGameState');
+    if (savedGame) {
+        try {
+            Object.assign(state.gameState, JSON.parse(savedGame));
+        } catch(e) {}
+    }
+    const savedHistory = localStorage.getItem('dndChatHistory');
+    if (savedHistory) {
+        try {
+            state.chatHistory = JSON.parse(savedHistory);
+        } catch(e) {}
+    }
+
+    // Determine screen
+    if (!state.apiKey) {
+        showScreen('apiKey');
+    } else if (!state.character) {
+        showScreen('characterCreation');
+    } else {
+        showScreen('chat');
+        loadChat();
+    }
+}
+
+// Screen management
+function showScreen(screenName) {
+    appDiv.innerHTML = '';
+    switch(screenName) {
+        case 'apiKey':
+            appDiv.innerHTML = renderApiKeyScreen();
+            break;
+        case 'characterCreation':
+            appDiv.innerHTML = renderCharacterCreationScreen();
+            bindCharacterCreation();
+            break;
+        case 'chat':
+            appDiv.innerHTML = renderChatScreen();
+            bindChat();
+            break;
+    }
+}
+
+// Screens rendering
+function renderApiKeyScreen() {
+    return `
+        <div class="container">
+            <h1>Rurik Tavern</h1>
+            <p>Ingresa tu API key de Groq (gratuita) para comenzar.</p>
+            <div class="input-group">
+                <label for="apiKeyInput">API Key:</label>
+                <input type="password" id="apiKeyInput" placeholder="sk-o...">
+            </div>
+            <button class="btn" id="saveApiKeyBtn">Guardar y Continuar</button>
+            <p class="text-muted">Tu clave se guarda solo en tu navegador (localStorage). Nunca se envía a nuestros servidores.</p>
+        </div>
+    `;
+}
+
+function renderCharacterCreationScreen() {
+    return `
+        <div class="container">
+            <h1>Creación de Personaje</h1>
+            <p>Responde unas preguntas para crear tu héroe. No necesitas conocimientos previos de D&D.</p>
+
+            <div class="input-group">
+                <label for="charName">Nombre del personaje:</label>
+                <input type="text" id="charName" placeholder="Ej: Rurik Piedra" required>
+            </div>
+
+            <div class="input-group">
+                <label for="charRace">Raza:</label>
+                <select id="charRace" required>
+                    <option value="">Selecciona una raza</option>
+                    <option value="Humano">Humano - Versátil y adaptable</option>
+                    <option value="Elfo">Elfo - Ágil y perceptivo</option>
+                    <option value="Enano">Enano - Resistente y fuerte</option>
+                    <option value="Mediano">Mediano (Hobbit) - Afortunado y discreto</option>
+                </select>
+            </div>
+
+            <div class="input-group">
+                <label for="charClass">Clase:</label>
+                <select id="charClass" required>
+                    <option value="">Selecciona una clase</option>
+                    <option value="Guerrero">Guerrero - Maestro del combate</option>
+                    <option value="Mago">Mago - Usuario de poderosos hechizos</option>
+                    <option value="Pícaro">Pícaro - Experto en sigilo y trampas</option>
+                    <option value="Clérigo">Clérigo - Sanador y protegido por lo divino</option>
+                </select>
+            </div>
+
+            <div class="input-group">
+                <label for="charBackground">Trasfondo:</label>
+                <select id="charBackground" required>
+                    <option value="">Selecciona un trasfondo</option>
+                    <option value="Soldado">Soldado - Entrenado en guerra y disciplina</option>
+                    <option value="Criminal">Criminal - Experto en lo ilegal y las calles</option>
+                    <option value="Noble">Noble - Educado y con conexiones influyentes</option>
+                    <option value="Huérfano">Huérfano - Sobreviviente callejero</option>
+                    <option value="Mercader">Mercader - Habilidoso en trueque y valoración</option>
+                </select>
+            </div>
+
+            <div class="input-group">
+                <button class="btn" id="rollStatsBtn">Tirar Estadísticas (Aleatorio)</button>
+                <div id="statsDisplay" class="text-muted" style="margin-top:0.5rem;"></div>
+            </div>
+
+            <button class="btn" id="createCharBtn" disabled>Crear Personaje y Empezar Aventura</button>
+        </div>
+    `;
+}
+
+function renderChatScreen() {
+    return `
+        <div class="container">
+            <div class="status-bar">
+                <div>❤️ HP: <span id="hpDisplay">${state.gameState.hp}/${state.gameState.maxHp}</span></div>
+                <div>📍 <span id="locationDisplay">${state.gameState.location}</span></div>
+                <div>🎒 Inventario: <span id="inventoryDisplay">${state.gameState.inventory.join(', ') || 'Vacío'}</span></div>
+            </div>
+            <div class="chat-container" id="chatContainer"></div>
+            <div class="input-group">
+                <input type="text" id="playerInput" placeholder="¿Qué haces?" autocomplete="off">
+                <button class="btn" id="sendBtn">Enviar</button>
+            </div>
+            <p class="text-muted" style="text-align:center;font-size:0.8rem;">Los modelos gratuitos tienen límite de contexto. El juego resumirá automáticamente cada 10 turnos.</p>
+        </div>
+    `;
+}
+
+// Bindings
+function bindApiKeyScreen() {
+    document.getElementById('saveApiKeyBtn').addEventListener('click', () => {
+        const key = document.getElementById('apiKeyInput').value.trim();
+        if (key) {
+            state.apiKey = key;
+            localStorage.setItem('groqApiKey', key);
+            showScreen('characterCreation');
+        } else {
+            alert('Por favor ingresa una API key válida');
+        }
+    });
+}
+
+function bindCharacterCreation() {
+    const nameInput = document.getElementById('charName');
+    const raceSelect = document.getElementById('charRace');
+    const classSelect = document.getElementById('charClass');
+    const backgroundSelect = document.getElementById('charBackground');
+    const rollBtn = document.getElementById('rollStatsBtn');
+    const statsDisplay = document.getElementById('statsDisplay');
+    const createBtn = document.getElementById('createCharBtn');
+
+    // Stats generation
+    function generateStats() {
+        const stats = {};
+        const abilities = ['FUE', 'DES', 'CON', 'INT', 'SAB', 'CAR'];
+        abilities.forEach(ab => {
+            // 4d6 drop lowest
+            const rolls = [1,2,3,4,5,6].map(() => Math.floor(Math.random()*6)+1).sort((a,b)=>a-b).slice(1);
+            const sum = rolls.reduce((a,b)=>a+b,0);
+            stats[ab] = sum;
+        });
+        return stats;
+    }
+
+    function updateStatsDisplay(stats) {
+        if (!stats) {
+            statsDisplay.textContent = '';
+            return;
+        }
+        const entries = Object.entries(stats).map(([ab,val])=>{
+            const mod = Math.floor((val-10)/2);
+            const modSign = mod>=0?'+':'';
+            return `${ab}: ${val} (${modSign}${mod})`;
+        });
+        statsDisplay.textContent = entries.join(' | ');
+    }
+
+    rollBtn.addEventListener('click', () => {
+        const stats = generateStats();
+        state.tempStats = stats;
+        updateStatsDisplay(stats);
+        // enable create button if other fields valid
+        checkFormValidity();
+    });
+
+    function checkFormValidity() {
+        const valid = nameInput.value.trim() !== '' &&
+                      raceSelect.value !== '' &&
+                      classSelect.value !== '' &&
+                      backgroundSelect.value !== '' &&
+                      state.tempStats !== undefined;
+        createBtn.disabled = !valid;
+    }
+
+    [nameInput, raceSelect, classSelect, backgroundSelect].forEach(el => {
+        el.addEventListener('input', checkFormValidity);
+    });
+
+    createBtn.addEventListener('click', () => {
+        state.character = {
+            name: nameInput.value.trim(),
+            race: raceSelect.value,
+            classe: classSelect.value,
+            background: backgroundSelect.value,
+            stats: state.tempStats
+        };
+        // derive HP from CON: base 10 + CON modifier * level (level 1)
+        const conMod = Math.floor((state.character.stats.CON - 10)/2);
+        state.gameState.maxHp = 10 + conMod;
+        state.gameState.hp = state.gameState.maxHp;
+        // set initial location etc.
+        state.gameState.location = "Taberna de Rurik";
+        state.gameState.inventory = []; // could add starting gear based on class
+        // save
+        localStorage.setItem('dndCharacter', JSON.stringify(state.character));
+        localStorage.setItem('dndGameState', JSON.stringify(state.gameState));
+        // start chat
+        showScreen('chat');
+        // initialize chat with DM greeting
+        state.chatHistory = [];
+        addDMMessage(`¡Bienvenido, ${state.character.name} el ${state.character.race} ${state.character.classe} de trasfondo ${state.character.background}!
+Tu aventura comienza en la humeante Taberna de Rurik, donde el olor a cerveza y leña se mezcla con el murmullo de conspiraciones. ¿Qué deseas hacer primero?`);
+    });
+}
+
+function bindChat() {
+    const chatContainer = document.getElementById('chatContainer');
+    const playerInput = document.getElementById('playerInput');
+    const sendBtn = document.getElementById('sendBtn');
+
+    function renderChat() {
+        chatContainer.innerHTML = '';
+        state.chatHistory.forEach(msg => {
+            const div = document.createElement('div');
+            div.className = `message ${msg.role === 'dm' ? 'dm' : 'player'}`;
+            div.textContent = msg.content;
+            chatContainer.appendChild(div);
+        });
+        // scroll to bottom
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function updateStatus() {
+        document.getElementById('hpDisplay').textContent = `${state.gameState.hp}/${state.gameState.maxHp}`;
+        document.getElementById('locationDisplay').textContent = state.gameState.location;
+        document.getElementById('inventoryDisplay').textContent = state.gameState.inventory.join(', ') || 'Vacío';
+    }
+
+    async function sendMessage() {
+        const playerAction = playerInput.value.trim();
+        if (!playerAction) return;
+
+        // disable input
+        playerInput.disabled = true;
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Enviando...';
+
+        // add player message
+        state.chatHistory.push({role: 'player', content: playerAction});
+        renderChat();
+        playerInput.value = '';
+
+        // build prompt
+        const prompt = buildPrompt(playerAction);
+
+        // call Groq API
+        try {
+            const response = await callGroqApi(prompt);
+            // extract state updates if any
+            const {narration, stateUpdates} = parseLlmResponse(response);
+            // apply state updates
+            if (stateUpdates) {
+                Object.assign(state.gameState, stateUpdates);
+                // clamp HP
+                if (state.gameState.hp < 0) state.gameState.hp = 0;
+                if (state.gameState.hp > state.gameState.maxHp) state.gameState.hp = state.gameState.maxHp;
+            }
+            // add DM message
+            addDMMessage(narration);
+            // increment turn
+            state.turnCount++;
+            // every 10 turns, summarize
+            if (state.turnCount % 10 === 0) {
+                await summarizeContext();
+            }
+            // save
+            saveGameState();
+        } catch (err) {
+            console.error(err);
+            addDMMessage("El humo de la taberna nubla la visión de Rurik. Inténtalo de nuevo.");
+        } finally {
+            // re-enable
+            playerInput.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Enviar';
+            playerInput.focus();
+        }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    playerInput.addEventListener('keypress', e => {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    // initial render
+    renderChat();
+    updateStatus();
+    playerInput.focus();
+}
+
+// Helper functions
+function addDMMessage(content) {
+    state.chatHistory.push({role: 'dm', content});
+    renderChat();
+}
+
+function renderChat() {
+    const chatContainer = document.getElementById('chatContainer');
+    chatContainer.innerHTML = '';
+    state.chatHistory.forEach(msg => {
+        const div = document.createElement('div');
+        div.className = `message ${msg.role === 'dm' ? 'dm' : 'player'}`;
+        div.textContent = msg.content;
+        chatContainer.appendChild(div);
+    });
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function buildPrompt(playerAction) {
+    const char = state.character;
+    const stats = char.stats;
+    const mod = (ability) => Math.floor((stats[ability] - 10)/2);
+    const system = `Eres Rurik, un Dungeon Master experimentado narrando una aventura de D&D en segunda persona.
+Tono: épico pero accesible, con humor ocasional.
+Personaje del jugador: ${char.name}, ${char.race}, ${char.classe}, ${char.background}.
+Stats: FUE ${stats.FUE} (${mod('FUE')}), DES ${stats.DES} (${mod('DES')}), CON ${stats.CON} (${mod('CON')}), INT ${stats.INT} (${mod('INT')}), SAB ${stats.SAB} (${mod('SAB')}), CAR ${stats.CAR} (${mod('CAR')}`;
+
+    const stateSection = `
+Estado actual:
+- Ubicación: ${state.gameState.location}
+- HP: ${state.gameState.hp}/${state.gameState.maxHp}
+- Inventario: ${state.gameState.inventory.join(', ') || 'vacío'}
+- Misión activa: ${state.gameState.quest}
+- Últimos eventos relevantes: ${state.gameState.summary || 'ninguno'}
+
+Reglas:
+- Respuestas de 80-150 palabras máximo.
+- Cuando el jugador intente algo con incertidumbre, indica que "tiras el dado" e incluye el resultado (simula d20 + modificador vs DC).
+- Mantén siempre coherencia con el estado anterior.
+- Termina siempre con una pregunta implícita o situación que invite a actuar.
+- Al final de tu respuesta, incluye un bloque de estado en formato JSON exactamente como: [STATE: {"hp": número, "location": "texto", "inventory": ["item1","item2"], "quest": "texto", "summary": "texto"}]
+Solo incluye un bloque STATE al final, nada más después.`;
+
+    const user = `Acción del jugador: ${playerAction}`;
+
+    return `${system}\n\n${stateSection}\n\nUsuario: ${user}`;
+}
+
+async function callGroqApi(prompt) {
+    const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    const body = {
+        model: 'llama3-8b-8192', // fast free tier
+        messages: [
+            {role: 'system', content: prompt.split('\n\n')[0]}, // only system part? Actually we need to send whole prompt as system? Let's send as system+user.
+            // Better: we send system and user separately.
+        ],
+        temperature: 0.7,
+        max_tokens: 500
+    };
+    // Actually we need to pass the constructed prompt as system message? We'll do:
+    // system: system + stateSection, user: playerAction
+    const systemMsg = prompt.split('\n\nUsuario:')[0];
+    const userMsg = prompt.split('\n\nUsuario:')[1];
+
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${state.apiKey}`
+        },
+        body: JSON.stringify({
+            model: 'llama3-8b-8192',
+            messages: [
+                {role: 'system', content: systemMsg},
+                {role: 'user', content: userMsg}
+            ],
+            temperature: 0.7,
+            max_tokens: 500
+        })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error Groq: ${response.status} ${errorText}`);
+    }
+    const data = await response.json();
+    return data.choices[0].message.content;
+}
+
+function parseLlmResponse(response) {
+    // Extract STATE block
+    const stateMatch = response.match(/\[STATE:\s*(\{.*?\})\]/);
+    let stateUpdates = null;
+    let narration = response;
+    if (stateMatch) {
+        try {
+            stateUpdates = JSON.parse(stateMatch[1]);
+            // Remove the STATE block from narration
+            narration = response.replace(stateMatch[0], '').trim();
+        } catch(e) {
+            console.warn('Failed to parse STATE block', e);
+        }
+    }
+    return {narration, stateUpdates};
+}
+
+async function summarizeContext() {
+    // Ask LLM to summarize last 8 turns into a short summary
+    const recent = state.chatHistory.slice(-16); // last 8 exchanges (player+dm)
+    const recentText = recent.map(m => `${m.role === 'dm' ? 'DM' : 'Jugador'}: ${m.content}`).join('\n');
+    const prompt = `Resume brevemente lo ocurrido en las últimas interacciones de esta aventura de D&D en 2-3 frases, enfocándote en cambios importantes de ubicación, HP, inventario o misión. Sé conciso.\n\n${recentText}`;
+    try {
+        const resp = await callGroqApi(prompt);
+        state.gameState.summary = resp.trim();
+        // Optionally trim chat history to keep only recent + summary? We'll keep all but we could trim.
+        // For safety, keep last 20 messages plus summary.
+        if (state.chatHistory.length > 30) {
+            state.chatHistory = state.chatHistory.slice(-20);
+        }
+        saveGameState();
+    } catch(e) {
+        console.warn('Could not summarize', e);
+    }
+}
+
+function saveGameState() {
+    localStorage.setItem('dndGameState', JSON.stringify(state.gameState));
+    localStorage.setItem('dndChatHistory', JSON.stringify(state.chatHistory));
+}
+
+function loadChat() {
+    // already rendered in bindChat
+}
+
+// Start
+init();
