@@ -313,7 +313,7 @@ function updateClassEvolution() {
 window.useAction = function(text) {
     const input = document.getElementById('playerInput');
     const btn = document.getElementById('sendBtn');
-    if (input && btn && !state.pendingRoll) { input.value = text; btn.click(); }
+    if (input && btn) { state.pendingRoll = null; input.value = text; btn.click(); }
 };
 
 // ===================== INIT =====================
@@ -839,7 +839,8 @@ function bindChat() {
 
     async function sendMessage() {
         const action = playerInput.value.trim();
-        if (!action || state.pendingRoll) return;
+        if (!action) return;
+        state.pendingRoll = null; // clear any stale roll
         playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...'; playerInput.value = '';
         addPlayerMessage(action, null, 'done');
         await callAndRespond(action, null);
@@ -1284,7 +1285,7 @@ ESTADO:
 ${worldSection}${rollSection}
 
 INSTRUCCIONES:
-- 100-250 palabras de narración, prosa rica con detalles sensoriales.
+- 60-120 palabras de narración. Conciso, cinematográfico, sin descripciones de entorno innecesarias. Ve al grano.
 - NPCs con nombres y personalidad consistente. Los eventos del mundo son REALES y visibles.
 - Si hay historia del mundo en esta zona, inclúyela naturalmente.
 - Romance, seducción y relaciones pueden desarrollarse naturalmente.
