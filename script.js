@@ -1,32 +1,32 @@
-// State
+// ===================== STATE =====================
 const state = {
     apiKey: null,
     character: null,
     gameState: {
         location: "Taberna de Rurik",
         timeOfDay: "Tarde",
-        hp: 0,
-        maxHp: 0,
+        hp: 0, maxHp: 0,
         inventory: [],
         quest: "Descubrir los secretos de la taberna",
         summary: ""
     },
     chatHistory: [],
-    turnCount: 0
+    turnCount: 0,
+    pendingRoll: null
 };
 
 const appDiv = document.getElementById('app');
 
-// Roll detection
+// ===================== ROLL SYSTEM =====================
 const ROLL_TRIGGERS = [
-    { keywords: ['persuad','convenc','ment','engañ','negoci','charm','seduc'], skill: 'Persuasión', stat: 'CAR' },
-    { keywords: ['busca','observa','invest','inspect','percib','detect','examin','estudia','analiz'], skill: 'Investigación', stat: 'SAB' },
-    { keywords: ['atac','golpe','dispara','lucha','combat','corta','apuñal','hiero','golpeo'], skill: 'Ataque', stat: 'FUE' },
-    { keywords: ['escond','sigilo','escapa','huye','corre','trepa','salta','esquiv'], skill: 'Destreza', stat: 'DES' },
-    { keywords: ['recuerd','sabe','conoce','identific','comprend','descifr'], skill: 'Conocimiento', stat: 'INT' },
-    { keywords: ['intimid','amenaz','asus'], skill: 'Intimidación', stat: 'CAR' },
-    { keywords: ['cura','sana','medic','ayuda'], skill: 'Medicina', stat: 'SAB' },
-    { keywords: ['roba','hurta','carterist','desapar'], skill: 'Sigilo', stat: 'DES' },
+    { keywords: ['persuad','convenc','engañ','negoci','seduc','charm'], skill: 'Persuasión', stat: 'CAR', dc: 12 },
+    { keywords: ['busca','observa','invest','inspect','percib','detect','examin','estudia','analiz','registro','registra','mira con atenci'], skill: 'Investigación', stat: 'SAB', dc: 10 },
+    { keywords: ['atac','golpe','dispara','lucha','combat','corta','apuñal','hiero','golpeo'], skill: 'Ataque', stat: 'FUE', dc: 12 },
+    { keywords: ['escond','sigilo','escapa','huye','trepa','salta','esquiv','infiltr'], skill: 'Sigilo', stat: 'DES', dc: 11 },
+    { keywords: ['recuerd','identific','comprend','descifr','sabe sobre','conoce'], skill: 'Conocimiento', stat: 'INT', dc: 11 },
+    { keywords: ['intimid','amenaz','asus'], skill: 'Intimidación', stat: 'CAR', dc: 13 },
+    { keywords: ['cura','sana','medic'], skill: 'Medicina', stat: 'SAB', dc: 10 },
+    { keywords: ['roba','hurta','carterist','desaparec'], skill: 'Hurto', stat: 'DES', dc: 13 },
 ];
 
 function detectRoll(action) {
@@ -37,25 +37,49 @@ function detectRoll(action) {
     return null;
 }
 
-function rollD20(statValue) {
+function rollD20(statValue, dc) {
     const roll = Math.floor(Math.random() * 20) + 1;
     const mod = Math.floor((statValue - 10) / 2);
     const total = roll + mod;
-    const success = total >= 12;
-    return { roll, mod, total, success };
+    return { roll, mod, total, dc, success: total >= dc };
 }
 
-// Initialize
-function init() {
-    const savedApiKey = localStorage.getItem('groqApiKey');
-    if (savedApiKey) state.apiKey = savedApiKey;
+window.executeRoll = async function(msgIdx) {
+    if (!state.pendingRoll) return;
+    const { action, trigger } = state.pendingRoll;
+    state.pendingRoll = null;
 
+    const statVal = state.character.stats[trigger.stat] || 10;
+    const result = { ...rollD20(statVal, trigger.dc), skill: trigger.skill };
+
+    state.chatHistory[msgIdx].roll = result;
+    state.chatHistory[msgIdx].rollState = 'done';
+
+    // Re-render that message
+    const container = document.getElementById('chatContainer');
+    const existing = container.querySelector(`[data-idx="${msgIdx}"]`);
+    if (existing) existing.replaceWith(createMessageEl(state.chatHistory[msgIdx], msgIdx));
+
+    await callAndRespond(action, result);
+};
+
+window.useAction = function(text) {
+    const input = document.getElementById('playerInput');
+    const btn = document.getElementById('sendBtn');
+    if (input && btn && !state.pendingRoll) {
+        input.value = text;
+        btn.click();
+    }
+};
+
+// ===================== INIT =====================
+function init() {
+    const savedKey = localStorage.getItem('groqApiKey');
+    if (savedKey) state.apiKey = savedKey;
     const savedChar = localStorage.getItem('dndCharacter');
     if (savedChar) { try { state.character = JSON.parse(savedChar); } catch(e) {} }
-
     const savedGame = localStorage.getItem('dndGameState');
     if (savedGame) { try { Object.assign(state.gameState, JSON.parse(savedGame)); } catch(e) {} }
-
     const savedHistory = localStorage.getItem('dndChatHistory');
     if (savedHistory) { try { state.chatHistory = JSON.parse(savedHistory); } catch(e) {} }
 
@@ -67,122 +91,102 @@ function init() {
 function showScreen(name) {
     appDiv.innerHTML = '';
     switch(name) {
-        case 'apiKey':
-            appDiv.innerHTML = renderApiKeyScreen();
-            bindApiKeyScreen();
-            break;
-        case 'characterCreation':
-            appDiv.innerHTML = renderCharacterCreationScreen();
-            bindCharacterCreation();
-            break;
-        case 'chat':
-            appDiv.innerHTML = renderChatScreen();
-            bindChat();
-            break;
+        case 'apiKey': appDiv.innerHTML = renderApiKeyScreen(); bindApiKeyScreen(); break;
+        case 'characterCreation': appDiv.innerHTML = renderCharacterCreationScreen(); bindCharacterCreation(); break;
+        case 'chat': appDiv.innerHTML = renderChatScreen(); bindChat(); break;
     }
 }
 
-// --- Render screens ---
+// ===================== RENDER SCREENS =====================
 function renderApiKeyScreen() {
-    return `
-        <div class="container">
-            <h1>Rurik Tavern</h1>
-            <p style="text-align:center;margin-bottom:1.5rem;color:var(--text-muted)">Ingresa tu API key de Groq para comenzar tu aventura.</p>
-            <div class="input-group">
-                <label for="apiKeyInput">API Key de Groq (gratuita)</label>
-                <input type="password" id="apiKeyInput" placeholder="gsk_...">
-            </div>
-            <button class="btn" id="saveApiKeyBtn">Comenzar</button>
-            <p style="text-align:center;font-size:0.8rem;color:var(--text-muted);margin-top:0.75rem">
-                Tu clave se guarda solo en este navegador. Nunca sale de tu dispositivo.
-            </p>
-        </div>`;
+    return `<div class="container">
+        <h1>Rurik Tavern</h1>
+        <p style="text-align:center;margin-bottom:1.5rem;color:var(--text-muted)">Ingresa tu API key de Groq para comenzar tu aventura.</p>
+        <div class="input-group">
+            <label for="apiKeyInput">API Key de Groq (gratuita)</label>
+            <input type="password" id="apiKeyInput" placeholder="gsk_...">
+        </div>
+        <button class="btn" id="saveApiKeyBtn">Comenzar</button>
+        <p style="text-align:center;font-size:0.8rem;color:var(--text-muted);margin-top:0.75rem">Tu clave se guarda solo en este navegador.</p>
+    </div>`;
 }
 
 function renderCharacterCreationScreen() {
-    return `
-        <div class="container">
-            <h1>Crea tu Héroe</h1>
-            <p style="text-align:center;margin-bottom:1.5rem;color:var(--text-muted)">No necesitas conocer D&D. Elige lo que te llame la atención.</p>
-
-            <div class="input-group">
-                <label for="charName">Nombre del personaje</label>
-                <input type="text" id="charName" placeholder="Ej: Rurik, Lyra, Gareth..." required>
-            </div>
-
-            <div class="input-group">
-                <label for="charRace">Raza</label>
-                <select id="charRace" required>
-                    <option value="">Elige una raza</option>
-                    <option value="Humano">Humano — Versátil y adaptable, puede hacer de todo</option>
-                    <option value="Elfo">Elfo — Ágil y perceptivo, experto en sigilo y magia</option>
-                    <option value="Enano">Enano — Resistente y tenaz, excelente en combate cercano</option>
-                    <option value="Mediano">Mediano — Pequeño pero afortunado, difícil de detectar</option>
-                </select>
-            </div>
-
-            <div class="input-group">
-                <label for="charClass">Clase</label>
-                <select id="charClass" required>
-                    <option value="">Elige una clase</option>
-                    <option value="Guerrero">Guerrero — Dominas el combate. Más resistente y dañino en batalla</option>
-                    <option value="Mago">Mago — Controlas hechizos poderosos. Frágil pero devastador</option>
-                    <option value="Pícaro">Pícaro — Sigilo, engaño y ataques precisos. Evitas el combate frontal</option>
-                    <option value="Clérigo">Clérigo — Puedes curar y proteger, con algo de combate divino</option>
-                </select>
-            </div>
-
-            <div class="input-group">
-                <label for="charBackground">Trasfondo</label>
-                <select id="charBackground" required>
-                    <option value="">Elige un trasfondo</option>
-                    <option value="Soldado">Soldado — Veterano de guerra, conoces el combate y la disciplina</option>
-                    <option value="Criminal">Criminal — Las calles te enseñaron todo. Contactos en el hampa</option>
-                    <option value="Noble">Noble — Educación refinada y conexiones en la nobleza</option>
-                    <option value="Huérfano">Huérfano — Sobreviviste solo. Ingenioso y desconfiado</option>
-                    <option value="Mercader">Mercader — Negociador nato, conoces el valor de todo</option>
-                </select>
-            </div>
-
-            <div class="input-group">
-                <label>Estadísticas (se generan tirando 4 dados)</label>
-                <button class="btn" id="rollStatsBtn" style="margin-top:0.25rem">🎲 Tirar Dados</button>
-                <div id="statsDisplay" style="margin-top:0.5rem;font-size:0.85rem;color:var(--text-muted);text-align:center"></div>
-            </div>
-
-            <button class="btn" id="createCharBtn" disabled>⚔️ Empezar Aventura</button>
-        </div>`;
+    return `<div class="container">
+        <h1>Crea tu Héroe</h1>
+        <p style="text-align:center;margin-bottom:1.5rem;color:var(--text-muted)">No necesitas conocer D&D. Elige lo que te llame la atención.</p>
+        <div class="input-group">
+            <label for="charName">Nombre del personaje</label>
+            <input type="text" id="charName" placeholder="Ej: Rurik, Lyra, Gareth..." required>
+        </div>
+        <div class="input-group">
+            <label for="charRace">Raza</label>
+            <select id="charRace" required>
+                <option value="">Elige una raza</option>
+                <option value="Humano">Humano — Versátil y adaptable</option>
+                <option value="Elfo">Elfo — Ágil y perceptivo</option>
+                <option value="Enano">Enano — Resistente y tenaz</option>
+                <option value="Mediano">Mediano — Pequeño pero afortunado</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="charClass">Clase</label>
+            <select id="charClass" required>
+                <option value="">Elige una clase</option>
+                <option value="Guerrero">Guerrero — Maestro del combate</option>
+                <option value="Mago">Mago — Hechizos poderosos</option>
+                <option value="Pícaro">Pícaro — Sigilo y engaño</option>
+                <option value="Clérigo">Clérigo — Sanador divino</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="charBackground">Trasfondo</label>
+            <select id="charBackground" required>
+                <option value="">Elige un trasfondo</option>
+                <option value="Soldado">Soldado — Veterano de guerra</option>
+                <option value="Criminal">Criminal — Experto en las calles</option>
+                <option value="Noble">Noble — Conexiones influyentes</option>
+                <option value="Huérfano">Huérfano — Sobreviviente nato</option>
+                <option value="Mercader">Mercader — Negociador nato</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label>Estadísticas</label>
+            <button class="btn" id="rollStatsBtn" style="margin-top:0.25rem">🎲 Tirar Dados</button>
+            <div id="statsDisplay" style="margin-top:0.5rem;font-size:0.82rem;color:var(--text-muted);text-align:center"></div>
+        </div>
+        <button class="btn" id="createCharBtn" disabled>⚔️ Empezar Aventura</button>
+    </div>`;
 }
 
 function renderChatScreen() {
-    return `
-        <div class="container">
-            <div class="status-bar">
-                <div>❤️ <span id="hpDisplay">${state.gameState.hp}/${state.gameState.maxHp}</span></div>
-                <div>📍 <span id="locationDisplay">${state.gameState.location}</span></div>
-                <div>🌙 <span id="timeDisplay">${state.gameState.timeOfDay}</span></div>
-                <div>🎒 <span id="inventoryDisplay">${state.gameState.inventory.join(', ') || 'Vacío'}</span></div>
+    return `<div class="game-wrapper">
+        <div class="status-bar">
+            <div>❤️ <span id="hpDisplay">${state.gameState.hp}/${state.gameState.maxHp}</span></div>
+            <div>📍 <span id="locationDisplay">${state.gameState.location}</span></div>
+            <div>🌙 <span id="timeDisplay">${state.gameState.timeOfDay}</span></div>
+            <div>🎒 <span id="inventoryDisplay">${state.gameState.inventory.join(', ') || 'Vacío'}</span></div>
+        </div>
+        <div class="game-layout">
+            <div class="chat-area">
+                <div class="chat-container" id="chatContainer"></div>
+                <div class="input-area">
+                    <input type="text" id="playerInput" placeholder="¿Qué haces?" autocomplete="off">
+                    <button class="btn" id="sendBtn">Enviar</button>
+                </div>
+                <p class="footer-note">El contexto se resume automáticamente cada 10 turnos</p>
             </div>
-            <div class="chat-container" id="chatContainer"></div>
-            <div class="input-area">
-                <input type="text" id="playerInput" placeholder="¿Qué haces?" autocomplete="off">
-                <button class="btn" id="sendBtn">Enviar</button>
-            </div>
-            <p class="footer-note">El contexto se resume automáticamente cada 10 turnos</p>
-        </div>`;
+            <aside class="party-panel" id="partyPanel"></aside>
+        </div>
+    </div>`;
 }
 
-// --- Bindings ---
+// ===================== BINDINGS =====================
 function bindApiKeyScreen() {
     document.getElementById('saveApiKeyBtn').addEventListener('click', () => {
         const key = document.getElementById('apiKeyInput').value.trim();
-        if (key) {
-            state.apiKey = key;
-            localStorage.setItem('groqApiKey', key);
-            showScreen('characterCreation');
-        } else {
-            alert('Por favor ingresa una API key válida');
-        }
+        if (key) { state.apiKey = key; localStorage.setItem('groqApiKey', key); showScreen('characterCreation'); }
+        else alert('Por favor ingresa una API key válida');
     });
 }
 
@@ -195,26 +199,21 @@ function bindCharacterCreation() {
     const statsDisplay = document.getElementById('statsDisplay');
     const createBtn = document.getElementById('createCharBtn');
 
-    function generateStats() {
-        const stats = {};
-        ['FUE','DES','CON','INT','SAB','CAR'].forEach(ab => {
-            const rolls = [1,2,3,4].map(() => Math.floor(Math.random()*6)+1).sort((a,b)=>a-b).slice(1);
-            stats[ab] = rolls.reduce((a,b)=>a+b,0);
-        });
-        return stats;
-    }
-
     function checkValidity() {
         createBtn.disabled = !(nameInput.value.trim() && raceSelect.value && classSelect.value && bgSelect.value && state.tempStats);
     }
 
     rollBtn.addEventListener('click', () => {
-        state.tempStats = generateStats();
-        const entries = Object.entries(state.tempStats).map(([ab,v]) => {
-            const mod = Math.floor((v-10)/2);
-            return `${ab}: ${v} (${mod>=0?'+':''}${mod})`;
+        const stats = {};
+        ['FUE','DES','CON','INT','SAB','CAR'].forEach(ab => {
+            const rolls = [1,2,3,4].map(() => Math.floor(Math.random()*6)+1).sort((a,b)=>a-b).slice(1);
+            stats[ab] = rolls.reduce((a,b)=>a+b,0);
         });
-        statsDisplay.textContent = entries.join(' · ');
+        state.tempStats = stats;
+        statsDisplay.textContent = Object.entries(stats).map(([ab,v]) => {
+            const m = Math.floor((v-10)/2);
+            return `${ab} ${v} (${m>=0?'+':''}${m})`;
+        }).join(' · ');
         checkValidity();
     });
 
@@ -238,7 +237,10 @@ function bindCharacterCreation() {
         localStorage.setItem('dndCharacter', JSON.stringify(state.character));
         localStorage.setItem('dndGameState', JSON.stringify(state.gameState));
         showScreen('chat');
-        addDMMessage(`Tu aventura comienza en la humeante Taberna de Rurik, donde el olor a cerveza y leña se mezcla con el murmullo de conspiraciones. Eres ${state.character.name}, un ${state.character.race} ${state.character.classe} de trasfondo ${state.character.background}.\n\nEl tabernero, un hombre fornido con cicatrices en las manos, te mira de reojo desde detrás de la barra. En la esquina, un grupo de viajeros hablan en voz baja. Una mujer encapuchada cerca de la puerta evita tu mirada.\n\n¿Qué haces?`);
+        addDMMessage(
+            `Tu aventura comienza en la humeante Taberna de Rurik, donde el olor a cerveza y leña se mezcla con el murmullo de conspiraciones. Eres ${state.character.name}, un ${state.character.race} ${state.character.classe} de trasfondo ${state.character.background}.\n\nEl tabernero, un hombre fornido con cicatrices en las manos, te mira de reojo desde detrás de la barra. En una mesa esquinera, un grupo de mercaderes hablan en voz baja sobre un camino peligroso al norte. Cerca de la puerta, una mujer encapuchada observa a todos sin que nadie la note.\n\n¿Qué haces?`,
+            ["Hablar con el tabernero", "Acercarse a la mujer encapuchada", "Escuchar la conversación de los mercaderes"]
+        );
     });
 }
 
@@ -246,177 +248,230 @@ function bindChat() {
     const playerInput = document.getElementById('playerInput');
     const sendBtn = document.getElementById('sendBtn');
 
-    function updateStatus() {
-        document.getElementById('hpDisplay').textContent = `${state.gameState.hp}/${state.gameState.maxHp}`;
-        document.getElementById('locationDisplay').textContent = state.gameState.location;
-        document.getElementById('timeDisplay').textContent = state.gameState.timeOfDay;
-        document.getElementById('inventoryDisplay').textContent = state.gameState.inventory.join(', ') || 'Vacío';
-    }
+    renderChat();
+    updatePartyPanel();
+    updateStatus();
+    playerInput.focus();
 
     async function sendMessage() {
         const action = playerInput.value.trim();
-        if (!action) return;
+        if (!action || state.pendingRoll) return;
 
         playerInput.disabled = true;
         sendBtn.disabled = true;
         sendBtn.textContent = '...';
         playerInput.value = '';
 
-        // Detect and execute roll
         const rollTrigger = detectRoll(action);
-        let rollResult = null;
-        if (rollTrigger && state.character) {
-            const statVal = state.character.stats[rollTrigger.stat] || 10;
-            rollResult = { ...rollD20(statVal), skill: rollTrigger.skill };
-        }
+        const msgIdx = state.chatHistory.length;
 
-        // Add player message with roll badge
-        addPlayerMessage(action, rollResult);
-
-        // Show typing indicator
-        const typingEl = document.createElement('div');
-        typingEl.className = 'typing-indicator';
-        typingEl.id = 'typingIndicator';
-        typingEl.textContent = 'El Maestro de Mazmorras narra...';
-        document.getElementById('chatContainer').appendChild(typingEl);
-        document.getElementById('chatContainer').scrollTop = 99999;
-
-        try {
-            const response = await callGroqApi(action, rollResult);
-            const { narration, stateUpdates } = parseLlmResponse(response);
-
-            // Remove typing indicator
-            document.getElementById('typingIndicator')?.remove();
-
-            if (stateUpdates) {
-                Object.assign(state.gameState, stateUpdates);
-                if (state.gameState.hp < 0) state.gameState.hp = 0;
-                if (state.gameState.hp > state.gameState.maxHp) state.gameState.hp = state.gameState.maxHp;
-            }
-            addDMMessage(narration);
-            updateStatus();
-            state.turnCount++;
-            if (state.turnCount % 10 === 0) await summarizeContext();
-            saveGameState();
-        } catch (err) {
-            console.error(err);
-            document.getElementById('typingIndicator')?.remove();
-            addDMMessage("El humo de la taberna nubla la visión. Inténtalo de nuevo.");
-        } finally {
+        if (rollTrigger) {
+            addPlayerMessage(action, null, 'pending', msgIdx);
+            state.pendingRoll = { action, trigger: rollTrigger, msgIdx };
             playerInput.disabled = false;
             sendBtn.disabled = false;
             sendBtn.textContent = 'Enviar';
             playerInput.focus();
+        } else {
+            addPlayerMessage(action, null, 'done', msgIdx);
+            await callAndRespond(action, null);
         }
     }
 
     sendBtn.addEventListener('click', sendMessage);
     playerInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
-
-    renderChat();
-    updateStatus();
-    playerInput.focus();
 }
 
-// --- Render helpers ---
+// ===================== CHAT RENDERING =====================
 function renderChat() {
     const container = document.getElementById('chatContainer');
     if (!container) return;
     container.innerHTML = '';
-    state.chatHistory.forEach(msg => {
-        const el = createMessageEl(msg);
-        container.appendChild(el);
-    });
+    state.chatHistory.forEach((msg, idx) => container.appendChild(createMessageEl(msg, idx)));
     container.scrollTop = container.scrollHeight;
 }
 
-function createMessageEl(msg) {
-    const wrapper = document.createElement('div');
+function createMessageEl(msg, idx) {
+    const wrap = document.createElement('div');
+    wrap.setAttribute('data-idx', idx);
+
     if (msg.role === 'dm') {
-        wrapper.className = 'message dm';
-        const header = document.createElement('div');
-        header.className = 'dm-header';
-        header.innerHTML = `<span class="dm-label">Maestro de Mazmorras</span><span class="dm-location">${msg.location || state.gameState.location} · ${msg.time || state.gameState.timeOfDay}</span>`;
-        const content = document.createElement('div');
-        content.className = 'dm-content';
-        content.textContent = msg.content;
-        wrapper.appendChild(header);
-        wrapper.appendChild(content);
+        wrap.className = 'message dm';
+        wrap.innerHTML = `
+            <div class="dm-header">
+                <span class="dm-label">Maestro de Mazmorras</span>
+                <span class="dm-location">${msg.location || ''} · ${msg.time || ''}</span>
+            </div>
+            <div class="dm-content">${msg.content}</div>
+            ${msg.actions && msg.actions.length ? `
+            <div class="action-chips">
+                ${msg.actions.map(a => `<button class="action-chip" onclick="useAction('${a.replace(/'/g,"\\'")}')">↗ ${a}</button>`).join('')}
+            </div>` : ''}`;
     } else {
-        wrapper.className = 'message player';
-        const action = document.createElement('div');
-        action.className = 'player-action';
-        action.textContent = msg.content;
-        wrapper.appendChild(action);
-        if (msg.roll) {
-            const badge = document.createElement('div');
-            const success = msg.roll.success;
-            badge.className = `roll-badge ${success ? 'success' : 'failure'}`;
-            badge.textContent = `${msg.roll.skill} · ${success ? 'Éxito' : 'Fallo'} (${msg.roll.total})`;
-            wrapper.appendChild(badge);
+        wrap.className = 'message player';
+        let rollHtml = '';
+        if (msg.rollState === 'pending' && !msg.roll) {
+            const trigger = state.pendingRoll?.trigger;
+            if (trigger) {
+                const statVal = state.character?.stats[trigger.stat] || 10;
+                const mod = Math.floor((statVal - 10) / 2);
+                rollHtml = `<div class="roll-pending">
+                    <span class="roll-skill">${trigger.skill}</span>
+                    <span class="roll-mod">${mod >= 0 ? '+' : ''}${mod}</span>
+                    <span class="roll-dc">DC ${trigger.dc}</span>
+                    <button class="roll-btn" onclick="executeRoll(${idx})">→ Tirar</button>
+                </div>`;
+            }
+        } else if (msg.roll) {
+            rollHtml = `<div class="roll-badge ${msg.roll.success ? 'success' : 'failure'}">
+                ${msg.roll.skill} · ${msg.roll.success ? 'Éxito' : 'Fallo'} (${msg.roll.total})
+            </div>`;
         }
+        wrap.innerHTML = `<div class="player-action">${msg.content}</div>${rollHtml}`;
     }
-    return wrapper;
+    return wrap;
 }
 
-function addDMMessage(content) {
-    const msg = {
-        role: 'dm',
-        content,
-        location: state.gameState.location,
-        time: state.gameState.timeOfDay
-    };
+function addDMMessage(content, actions) {
+    const msg = { role: 'dm', content, actions: actions || [], location: state.gameState.location, time: state.gameState.timeOfDay };
     state.chatHistory.push(msg);
     const container = document.getElementById('chatContainer');
     if (container) {
-        container.appendChild(createMessageEl(msg));
+        container.appendChild(createMessageEl(msg, state.chatHistory.length - 1));
         container.scrollTop = container.scrollHeight;
     }
 }
 
-function addPlayerMessage(content, roll) {
-    const msg = { role: 'player', content, roll };
+function addPlayerMessage(content, roll, rollState, idx) {
+    const msg = { role: 'player', content, roll, rollState };
     state.chatHistory.push(msg);
     const container = document.getElementById('chatContainer');
     if (container) {
-        container.appendChild(createMessageEl(msg));
+        container.appendChild(createMessageEl(msg, idx));
         container.scrollTop = container.scrollHeight;
     }
 }
 
-// --- API ---
+function updateStatus() {
+    const hp = document.getElementById('hpDisplay');
+    const loc = document.getElementById('locationDisplay');
+    const time = document.getElementById('timeDisplay');
+    const inv = document.getElementById('inventoryDisplay');
+    if (hp) hp.textContent = `${state.gameState.hp}/${state.gameState.maxHp}`;
+    if (loc) loc.textContent = state.gameState.location;
+    if (time) time.textContent = state.gameState.timeOfDay;
+    if (inv) inv.textContent = state.gameState.inventory.join(', ') || 'Vacío';
+}
+
+function updatePartyPanel() {
+    const panel = document.getElementById('partyPanel');
+    if (!panel || !state.character) return;
+    const char = state.character;
+    const stats = char.stats;
+    const hpPct = Math.max(0, Math.min(100, (state.gameState.hp / state.gameState.maxHp) * 100));
+    const icons = { 'Guerrero': '⚔️', 'Mago': '🔮', 'Pícaro': '🗡️', 'Clérigo': '✦' };
+    const hpColor = hpPct > 60 ? '#4a7c59' : hpPct > 30 ? '#8a6a20' : '#7c4a4a';
+    panel.innerHTML = `
+        <div class="party-card">
+            <div class="party-avatar">${icons[char.classe] || '⚔️'}</div>
+            <div class="party-name">${char.name}</div>
+            <div class="party-class">${char.race} · ${char.classe}</div>
+            <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
+            <div class="hp-text">PV ${state.gameState.hp} / ${state.gameState.maxHp}</div>
+            <div class="stats-mini">
+                ${Object.entries(stats).map(([ab, v]) => {
+                    const m = Math.floor((v-10)/2);
+                    return `<div class="stat-mini">
+                        <span class="stat-label">${ab}</span>
+                        <span class="stat-val">${v}</span>
+                        <span class="stat-mod">${m>=0?'+':''}${m}</span>
+                    </div>`;
+                }).join('')}
+            </div>
+            <div class="party-bg">${char.background}</div>
+        </div>`;
+}
+
+// ===================== API =====================
+async function callAndRespond(action, rollResult) {
+    const playerInput = document.getElementById('playerInput');
+    const sendBtn = document.getElementById('sendBtn');
+
+    // Typing indicator
+    const typingEl = document.createElement('div');
+    typingEl.className = 'typing-indicator';
+    typingEl.id = 'typingIndicator';
+    typingEl.textContent = 'El Maestro de Mazmorras narra...';
+    const container = document.getElementById('chatContainer');
+    if (container) { container.appendChild(typingEl); container.scrollTop = container.scrollHeight; }
+
+    try {
+        const response = await callGroqApi(action, rollResult);
+        const { narration, stateUpdates, actions } = parseLlmResponse(response);
+
+        document.getElementById('typingIndicator')?.remove();
+
+        if (stateUpdates) {
+            Object.assign(state.gameState, stateUpdates);
+            if (state.gameState.hp < 0) state.gameState.hp = 0;
+            if (state.gameState.hp > state.gameState.maxHp) state.gameState.hp = state.gameState.maxHp;
+        }
+
+        addDMMessage(narration, actions);
+        updateStatus();
+        updatePartyPanel();
+        state.turnCount++;
+        if (state.turnCount % 10 === 0) await summarizeContext();
+        saveGameState();
+    } catch(err) {
+        console.error(err);
+        document.getElementById('typingIndicator')?.remove();
+        addDMMessage("El humo de la taberna nubla la visión. Inténtalo de nuevo.", []);
+    } finally {
+        if (playerInput) { playerInput.disabled = false; playerInput.focus(); }
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
+    }
+}
+
 function buildPrompt(playerAction, rollResult) {
     const char = state.character;
     const stats = char.stats;
-    const mod = (ab) => { const m = Math.floor((stats[ab]-10)/2); return (m>=0?'+':'')+m; };
+    const fmod = (ab) => { const m = Math.floor((stats[ab]-10)/2); return (m>=0?'+':'')+m; };
 
     let rollSection = '';
     if (rollResult) {
-        rollSection = `\nResultado de tirada: ${rollResult.skill} — d20(${rollResult.roll}) ${mod(rollResult.skill==='Ataque'?'FUE':rollResult.skill==='Persuasión'||rollResult.skill==='Intimidación'?'CAR':rollResult.skill==='Destreza'||rollResult.skill==='Sigilo'?'DES':rollResult.skill==='Conocimiento'?'INT':'SAB')} = ${rollResult.total} → ${rollResult.success ? 'ÉXITO' : 'FALLO'}`;
+        rollSection = `\nTirada resuelta: ${rollResult.skill} — d20(${rollResult.roll}) ${fmod(
+            rollResult.skill === 'Ataque' ? 'FUE' :
+            rollResult.skill === 'Persuasión' || rollResult.skill === 'Intimidación' ? 'CAR' :
+            rollResult.skill === 'Sigilo' || rollResult.skill === 'Hurto' ? 'DES' :
+            rollResult.skill === 'Conocimiento' ? 'INT' : 'SAB'
+        )} = ${rollResult.total} vs DC ${rollResult.dc} → ${rollResult.success ? 'ÉXITO' : 'FALLO'}`;
     }
 
-    const system = `Eres el Maestro de Mazmorras de una partida de D&D ambientada en un mundo de fantasía oscura medieval. Narras en segunda persona, con prosa cinematográfica e inmersiva.
+    const system = `Eres el Maestro de Mazmorras de una campaña de D&D en un mundo de fantasía oscura medieval. Narras en segunda persona, con prosa cinematográfica e inmersiva al estilo de una novela de fantasía.
 
-PERSONAJE DEL JUGADOR:
-- Nombre: ${char.name} | Raza: ${char.race} | Clase: ${char.classe} | Trasfondo: ${char.background}
-- FUE ${stats.FUE}(${mod('FUE')}), DES ${stats.DES}(${mod('DES')}), CON ${stats.CON}(${mod('CON')}), INT ${stats.INT}(${mod('INT')}), SAB ${stats.SAB}(${mod('SAB')}), CAR ${stats.CAR}(${mod('CAR')})
+PERSONAJE:
+- ${char.name}, ${char.race}, ${char.classe}, trasfondo: ${char.background}
+- FUE ${stats.FUE}(${fmod('FUE')}), DES ${stats.DES}(${fmod('DES')}), CON ${stats.CON}(${fmod('CON')}), INT ${stats.INT}(${fmod('INT')}), SAB ${stats.SAB}(${fmod('SAB')}), CAR ${stats.CAR}(${fmod('CAR')})
 
-ESTADO ACTUAL:
+ESTADO:
 - Ubicación: ${state.gameState.location}
 - Hora: ${state.gameState.timeOfDay}
 - HP: ${state.gameState.hp}/${state.gameState.maxHp}
 - Inventario: ${state.gameState.inventory.join(', ') || 'vacío'}
-- Misión activa: ${state.gameState.quest}
-- Contexto previo: ${state.gameState.summary || 'inicio de la aventura'}
+- Misión: ${state.gameState.quest}
+- Contexto: ${state.gameState.summary || 'inicio de aventura'}
 ${rollSection}
 
-REGLAS DE NARRACIÓN:
-- Escribe entre 150 y 350 palabras por respuesta. Sé descriptivo y cinematográfico.
-- Los NPCs tienen nombres propios, personalidad y motivaciones. Recuérdalos entre turnos.
-- Si hubo una tirada, narra las consecuencias apropiadas al resultado (éxito parcial en fallos por poco, éxito total en éxitos altos).
-- La hora del día puede avanzar según lo que ocurra (Mañana → Mediodía → Tarde → Noche → Mañana).
-- Termina siempre con la situación en suspenso o una pregunta implícita.
-- Al final incluye exactamente este bloque (sin nada después): [STATE: {"hp": número, "location": "texto", "timeOfDay": "texto", "inventory": ["item1"], "quest": "texto", "summary": "resumen breve de lo ocurrido hasta ahora"}]`;
+INSTRUCCIONES:
+- Escribe 150-350 palabras. Prosa rica, cinematográfica, con detalles sensoriales.
+- Los NPCs tienen nombres propios y personalidad consistente. Recuérdalos.
+- Si hubo tirada: narra las consecuencias del éxito o fallo de forma clara y dramática.
+- La hora del día puede avanzar naturalmente.
+- Termina en suspense o situación de decisión.
+- Al final incluye en orden (sin nada después):
+[ACTIONS: ["acción corta 1", "acción corta 2", "acción corta 3"]]
+[STATE: {"hp": N, "location": "texto", "timeOfDay": "texto", "inventory": [], "quest": "texto", "summary": "resumen breve"}]`;
 
     return { system, user: playerAction };
 }
@@ -425,59 +480,54 @@ async function callGroqApi(playerAction, rollResult) {
     const { system, user } = buildPrompt(playerAction, rollResult);
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${state.apiKey}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.apiKey}` },
         body: JSON.stringify({
             model: 'llama-3.3-70b-versatile',
-            messages: [
-                { role: 'system', content: system },
-                { role: 'user', content: user }
-            ],
+            messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
             temperature: 0.8,
-            max_tokens: 800
+            max_tokens: 900
         })
     });
-    if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`Error Groq: ${response.status} ${err}`);
-    }
+    if (!response.ok) { const e = await response.text(); throw new Error(`Groq ${response.status}: ${e}`); }
     const data = await response.json();
     return data.choices[0].message.content;
 }
 
 function parseLlmResponse(response) {
-    const stateMatch = response.match(/\[STATE:\s*(\{[\s\S]*?\})\]/);
-    let stateUpdates = null;
     let narration = response;
-    if (stateMatch) {
-        try {
-            stateUpdates = JSON.parse(stateMatch[1]);
-            narration = response.replace(stateMatch[0], '').trim();
-        } catch(e) {
-            console.warn('STATE parse error', e);
-        }
+    let stateUpdates = null;
+    let actions = [];
+
+    const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\])\]/);
+    if (actionsMatch) {
+        try { actions = JSON.parse(actionsMatch[1]); } catch(e) {}
+        narration = narration.replace(actionsMatch[0], '').trim();
     }
-    return { narration, stateUpdates };
+
+    const stateMatch = response.match(/\[STATE:\s*(\{[\s\S]*?\})\]/);
+    if (stateMatch) {
+        try { stateUpdates = JSON.parse(stateMatch[1]); } catch(e) {}
+        narration = narration.replace(stateMatch[0], '').trim();
+    }
+
+    return { narration, stateUpdates, actions };
 }
 
 async function summarizeContext() {
     const recent = state.chatHistory.slice(-16);
     const text = recent.map(m => `${m.role === 'dm' ? 'DM' : 'Jugador'}: ${m.content}`).join('\n');
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.apiKey}` },
             body: JSON.stringify({
                 model: 'llama-3.3-70b-versatile',
-                messages: [{ role: 'user', content: `Resume en 3 frases lo más importante de esta sesión de D&D: ubicación, eventos clave, NPCs conocidos, objetos obtenidos.\n\n${text}` }],
-                temperature: 0.3,
-                max_tokens: 200
+                messages: [{ role: 'user', content: `Resume en 3 frases los eventos clave, NPCs y objetos importantes de esta sesión de D&D:\n\n${text}` }],
+                temperature: 0.3, max_tokens: 200
             })
         });
-        const data = await response.json();
-        state.gameState.summary = data.choices[0].message.content.trim();
+        const d = await r.json();
+        state.gameState.summary = d.choices[0].message.content.trim();
         if (state.chatHistory.length > 30) state.chatHistory = state.chatHistory.slice(-20);
         saveGameState();
     } catch(e) { console.warn('Summarize error', e); }
