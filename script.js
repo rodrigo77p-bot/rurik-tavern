@@ -864,8 +864,6 @@ function renderNpcModalContent() {
                 </div>
                 <div class="npc-card-actions">
                     <button class="npc-btn" title="Regenerar retrato" onclick="regenNpcPortrait(${idx})">&#128260;</button>
-                    <button class="npc-btn npc-rel-up" title="Mejorar relacion" onclick="adjustNpcRel(${idx},1)">+</button>
-                    <button class="npc-btn npc-rel-dn" title="Empeorar relacion" onclick="adjustNpcRel(${idx},-1)">-</button>
                     <button class="npc-btn npc-del" title="Eliminar" onclick="deleteNpc(${idx})">&#128465;</button>
                 </div>
             </div>
