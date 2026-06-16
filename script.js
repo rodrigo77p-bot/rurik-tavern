@@ -1,4 +1,85 @@
 // ===================== CONSTANTS =====================
+
+// ===================== FIREBASE =====================
+let fbApp = null, fbDb = null, fbAuth = null, fbUser = null;
+
+async function loadFirebaseSDK() {
+    if (typeof firebase !== 'undefined') return;
+    const urls = [
+        'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js',
+        'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
+        'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js'
+    ];
+    for (const url of urls) {
+        await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = url; s.onload = resolve; s.onerror = reject;
+            document.head.appendChild(s);
+        });
+    }
+}
+
+function initFirebase(config) {
+    if (fbApp) return;
+    fbApp = firebase.initializeApp(config);
+    fbAuth = firebase.auth();
+    fbDb = firebase.firestore();
+}
+
+async function syncFromFirestore() {
+    if (!fbDb || !fbUser) return;
+    const uid = fbUser.uid;
+    try {
+        const dataDoc = await fbDb.doc(`users/${uid}/data/main`).get();
+        if (dataDoc.exists) {
+            const d = dataDoc.data();
+            if (d.characters) localStorage.setItem('dndCharacters', JSON.stringify(d.characters));
+            if (d.worldState) localStorage.setItem('dndWorldState', JSON.stringify(d.worldState));
+        }
+        const chars = getAllCharacters();
+        for (const char of chars) {
+            const gsDoc = await fbDb.doc(`users/${uid}/gameStates/${char.id}`).get();
+            if (gsDoc.exists) localStorage.setItem('dndGameState_' + char.id, JSON.stringify(gsDoc.data()));
+            const advDoc = await fbDb.doc(`users/${uid}/adventures/${char.id}`).get();
+            if (advDoc.exists) localStorage.setItem('dndAdventure_' + char.id, JSON.stringify(advDoc.data()));
+            const chDoc = await fbDb.doc(`users/${uid}/chatHistory/${char.id}`).get();
+            if (chDoc.exists && chDoc.data().messages) localStorage.setItem('dndChatHistory_' + char.id, JSON.stringify(chDoc.data().messages));
+        }
+    } catch(e) { console.error('Firestore sync error:', e); }
+}
+
+async function fsSaveMain() {
+    if (!fbDb || !fbUser) return;
+    try {
+        await fbDb.doc(`users/${fbUser.uid}/data/main`).set({
+            characters: getAllCharacters(),
+            worldState: getWorldState(),
+            updatedAt: new Date().toISOString()
+        });
+    } catch(e) { console.error('FS save error:', e); }
+}
+async function fsSaveGameState(id, gs) {
+    if (!fbDb || !fbUser) return;
+    try { await fbDb.doc(`users/${fbUser.uid}/gameStates/${id}`).set(gs); } catch(e) {}
+}
+async function fsSaveChatHistory(id, ch) {
+    if (!fbDb || !fbUser) return;
+    try { await fbDb.doc(`users/${fbUser.uid}/chatHistory/${id}`).set({ messages: ch }); } catch(e) {}
+}
+async function fsSaveAdventure(id, adv) {
+    if (!fbDb || !fbUser) return;
+    try { await fbDb.doc(`users/${fbUser.uid}/adventures/${id}`).set(adv); } catch(e) {}
+}
+async function fsDeleteCharacter(id) {
+    if (!fbDb || !fbUser) return;
+    const uid = fbUser.uid;
+    try {
+        await fbDb.doc(`users/${uid}/gameStates/${id}`).delete();
+        await fbDb.doc(`users/${uid}/chatHistory/${id}`).delete();
+        await fbDb.doc(`users/${uid}/adventures/${id}`).delete();
+    } catch(e) {}
+}
+
 const ADVENTURES = [
     { id:'tavern-mystery', title:'El Misterio de la Taberna', emoji:'🕵️', gradient:'linear-gradient(135deg,#1a0a0a,#3d1a0a)', tags:['Misterio','Intriga'], description:'Clientes desaparecen en la Taberna de Rurik. Alguien entre los habituales oculta un secreto mortal.', startScene:'La taberna de Rurik está inusualmente silenciosa esta noche. Tres mesas vacías que siempre tienen clientes, la cocinera evita tu mirada, y el tabernero Grimbold limpia el mismo vaso desde hace veinte minutos. En el rincón del fondo, una silla volcada que nadie ha levantado desde ayer.', location:'Taberna de Rurik' },
     { id:'dungeon-king', title:'Las Catacumbas del Rey Olvidado', emoji:'💀', gradient:'linear-gradient(135deg,#0a0a1a,#1a0a3d)', tags:['Dungeon','Exploración'], description:'Bajo el castillo en ruinas yacen tesoros y horrores. Las trampas del rey muerto llevan mil años esperando.', startScene:'La entrada a las catacumbas es una grieta en la roca, apenas lo bastante ancha para entrar de lado. El aire que sale huele a piedra húmeda y algo antiguo. Tu antorcha proyecta sombras que parecen moverse antes de que la llama las alcance. La leyenda dice que el último explorador que entró dejó sus botas en la entrada. Las botas siguen aquí.', location:'Catacumbas del Rey Olvidado' },
@@ -36,6 +117,7 @@ function saveWorldEvent(event) {
     event.date = new Date().toISOString().slice(0,10);
     ws.events.push(event);
     localStorage.setItem('dndWorldState', JSON.stringify(ws));
+    fsSaveMain();
 }
 function getEventsForLocation(location) {
     if (!location) return [];
@@ -51,7 +133,7 @@ function generateId() { return 'c' + Date.now().toString(36) + Math.random().toS
 function getAllCharacters() {
     try { return JSON.parse(localStorage.getItem('dndCharacters') || '[]'); } catch(e) { return []; }
 }
-function saveAllCharacters(chars) { localStorage.setItem('dndCharacters', JSON.stringify(chars)); }
+function saveAllCharacters(chars) { localStorage.setItem('dndCharacters', JSON.stringify(chars)); fsSaveMain(); }
 
 function getActiveCharId() { return localStorage.getItem('dndActiveCharId'); }
 function setActiveCharId(id) { localStorage.setItem('dndActiveCharId', id); }
@@ -69,15 +151,15 @@ function updateCharData(charObj) {
 function getGameState(id) {
     try { return JSON.parse(localStorage.getItem('dndGameState_' + id) || 'null'); } catch(e) { return null; }
 }
-function saveGameStateFor(id, gs) { localStorage.setItem('dndGameState_' + id, JSON.stringify(gs)); }
+function saveGameStateFor(id, gs) { localStorage.setItem('dndGameState_' + id, JSON.stringify(gs)); fsSaveGameState(id, gs); }
 function getChatHistory(id) {
     try { return JSON.parse(localStorage.getItem('dndChatHistory_' + id) || '[]'); } catch(e) { return []; }
 }
-function saveChatHistoryFor(id, ch) { localStorage.setItem('dndChatHistory_' + id, JSON.stringify(ch)); }
+function saveChatHistoryFor(id, ch) { localStorage.setItem('dndChatHistory_' + id, JSON.stringify(ch)); fsSaveChatHistory(id, ch); }
 function getAdventure(id) {
     try { return JSON.parse(localStorage.getItem('dndAdventure_' + id) || 'null'); } catch(e) { return null; }
 }
-function saveAdventureFor(id, adv) { localStorage.setItem('dndAdventure_' + id, JSON.stringify(adv)); }
+function saveAdventureFor(id, adv) { localStorage.setItem('dndAdventure_' + id, JSON.stringify(adv)); fsSaveAdventure(id, adv); }
 
 // ===================== SESSION STATE =====================
 const state = {
@@ -162,10 +244,26 @@ window.useAction = function(text) {
 };
 
 // ===================== INIT =====================
-function init() {
+async function init() {
+    const fbConfig = localStorage.getItem('fbConfig');
+    if (!fbConfig) { showScreen('firebaseSetup'); return; }
+    try { initFirebase(JSON.parse(fbConfig)); } catch(e) { localStorage.removeItem('fbConfig'); showScreen('firebaseSetup'); return; }
+
+    await new Promise(resolve => {
+        const unsub = fbAuth.onAuthStateChanged(user => { unsub(); fbUser = user; resolve(); });
+    });
+
+    if (!fbUser) { showScreen('auth'); return; }
+
+    const loadingEl = document.createElement('div');
+    loadingEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0d0a07;color:#c9a84c;font-family:Cinzel,serif;font-size:1rem;letter-spacing:0.1em';
+    loadingEl.textContent = 'Sincronizando...';
+    document.body.appendChild(loadingEl);
+    await syncFromFirestore();
+    loadingEl.remove();
+
     state.apiKey = localStorage.getItem('groqApiKey');
     if (!state.apiKey) { showScreen('apiKey'); return; }
-    // Migrate old single-character data
     migrateOldData();
     showScreen('characterHub');
 }
@@ -209,6 +307,8 @@ function loadCharacter(charId) {
 function showScreen(name) {
     appDiv.innerHTML = '';
     switch(name) {
+        case 'firebaseSetup': appDiv.innerHTML = renderFirebaseSetupScreen(); bindFirebaseSetupScreen(); break;
+        case 'auth': appDiv.innerHTML = renderAuthScreen(); bindAuthScreen(); break;
         case 'apiKey': appDiv.innerHTML = renderApiKeyScreen(); bindApiKeyScreen(); break;
         case 'characterHub': appDiv.innerHTML = renderCharacterHub(); bindCharacterHub(); break;
         case 'characterCreation': appDiv.innerHTML = renderCharacterCreationScreen(); bindCharacterCreation(); break;
@@ -347,6 +447,7 @@ function renderChatScreen() {
             <button class="modal-btn" id="switchCharBtn">👥 Cambiar Personaje</button>
             <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
             <button class="modal-btn" id="viewLegacyBtn">📜 Ver Legado del Mundo</button>
+            <button class="modal-btn" id="logoutBtn">🚪 Cerrar Sesión</button>
             <button class="modal-btn danger" id="closeMenuBtn">✕ Cerrar</button>
         </div></div>
         <div id="inventoryModal" class="modal hidden"><div class="modal-box">
@@ -400,6 +501,141 @@ function renderChatScreen() {
     </div>`;
 }
 
+
+// ===================== FIREBASE SCREENS =====================
+function renderFirebaseSetupScreen() {
+    return `<div class="container">
+        <h1>Rurik Tavern</h1>
+        <p style="text-align:center;color:var(--text-muted);margin-bottom:1rem;font-size:0.88rem">Configura Firebase para sincronizar personajes entre dispositivos.</p>
+        <div style="background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1.25rem;font-size:0.82rem;color:var(--text-muted);line-height:1.9">
+            <strong style="color:var(--accent)">Configuración inicial (5 min, gratis):</strong><br>
+            1. Ve a <strong style="color:#fff">console.firebase.google.com</strong><br>
+            2. Crea un proyecto → agrega una <strong style="color:#fff">app web</strong><br>
+            3. Copia el objeto <strong style="color:#fff">firebaseConfig</strong><br>
+            4. En Authentication → Sign-in method → activa <strong style="color:#fff">Email/Contraseña</strong><br>
+            5. En Firestore Database → crea base de datos (modo prueba)
+        </div>
+        <div class="input-group">
+            <label>Pega tu firebaseConfig (JSON)</label>
+            <textarea id="fbConfigInput" rows="7" placeholder='{"apiKey":"AIza...","authDomain":"tu-proyecto.firebaseapp.com","projectId":"tu-proyecto","storageBucket":"tu-proyecto.appspot.com","messagingSenderId":"123...","appId":"1:123..."}' style="background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.6rem 0.75rem;border-radius:4px;font-size:0.75rem;font-family:monospace;resize:vertical;width:100%;box-sizing:border-box"></textarea>
+        </div>
+        <button class="btn" id="fbSetupBtn">Conectar Firebase</button>
+        <div id="fbSetupError" style="color:#e05555;font-size:0.82rem;text-align:center;margin-top:0.5rem;display:none"></div>
+    </div>`;
+}
+
+function renderAuthScreen() {
+    return `<div class="container">
+        <h1>Rurik Tavern</h1>
+        <div style="display:flex;gap:0.5rem;margin-bottom:1.25rem">
+            <button class="btn" id="tabLogin" style="flex:1">Iniciar Sesión</button>
+            <button class="btn" id="tabRegister" style="flex:1;background:transparent;border:1px solid var(--border);color:var(--text-muted)">Registrarse</button>
+        </div>
+        <div id="authLoginForm">
+            <div class="input-group"><label>Email</label><input type="email" id="loginEmail" placeholder="tu@email.com" autocomplete="email"></div>
+            <div class="input-group"><label>Contraseña</label><input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password"></div>
+            <button class="btn" id="loginBtn">Entrar</button>
+        </div>
+        <div id="authRegisterForm" style="display:none">
+            <div class="input-group"><label>Email</label><input type="email" id="regEmail" placeholder="tu@email.com" autocomplete="email"></div>
+            <div class="input-group"><label>Contraseña (mín. 6 caracteres)</label><input type="password" id="regPassword" placeholder="••••••••" autocomplete="new-password"></div>
+            <button class="btn" id="registerBtn">Crear Cuenta</button>
+        </div>
+        <div id="authError" style="color:#e05555;font-size:0.82rem;text-align:center;margin-top:0.5rem;display:none"></div>
+        <button id="resetFbBtn" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;margin-top:1.5rem;display:block;text-align:center;width:100%">Cambiar configuración Firebase</button>
+    </div>`;
+}
+
+function bindFirebaseSetupScreen() {
+    document.getElementById('fbSetupBtn').addEventListener('click', () => {
+        const raw = document.getElementById('fbConfigInput').value.trim();
+        const errEl = document.getElementById('fbSetupError');
+        errEl.style.display = 'none';
+        let config;
+        try {
+            // Accept both raw JS object notation and JSON
+            config = JSON.parse(raw.replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'));
+            if (!config.apiKey || !config.projectId) throw new Error('Faltan campos');
+        } catch(e) {
+            errEl.textContent = 'JSON inválido. Asegúrate de copiar el objeto completo.';
+            errEl.style.display = 'block';
+            return;
+        }
+        try {
+            localStorage.setItem('fbConfig', JSON.stringify(config));
+            initFirebase(config);
+            showScreen('auth');
+        } catch(e) {
+            errEl.textContent = 'Error al inicializar Firebase: ' + e.message;
+            errEl.style.display = 'block';
+        }
+    });
+}
+
+function bindAuthScreen() {
+    const errEl = document.getElementById('authError');
+    const loginForm = document.getElementById('authLoginForm');
+    const regForm = document.getElementById('authRegisterForm');
+
+    document.getElementById('tabLogin').addEventListener('click', () => {
+        loginForm.style.display = ''; regForm.style.display = 'none';
+        document.getElementById('tabLogin').style.cssText = 'flex:1';
+        document.getElementById('tabRegister').style.cssText = 'flex:1;background:transparent;border:1px solid var(--border);color:var(--text-muted)';
+    });
+    document.getElementById('tabRegister').addEventListener('click', () => {
+        loginForm.style.display = 'none'; regForm.style.display = '';
+        document.getElementById('tabRegister').style.cssText = 'flex:1';
+        document.getElementById('tabLogin').style.cssText = 'flex:1;background:transparent;border:1px solid var(--border);color:var(--text-muted)';
+    });
+
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+        const email = document.getElementById('loginEmail').value.trim();
+        const pass = document.getElementById('loginPassword').value;
+        errEl.style.display = 'none';
+        try {
+            const cred = await fbAuth.signInWithEmailAndPassword(email, pass);
+            fbUser = cred.user;
+            const loadingEl = document.createElement('div');
+            loadingEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0d0a07;color:#c9a84c;font-family:Cinzel,serif;font-size:1rem;letter-spacing:0.1em';
+            loadingEl.textContent = 'Cargando personajes...';
+            document.body.appendChild(loadingEl);
+            await syncFromFirestore();
+            loadingEl.remove();
+            state.apiKey = localStorage.getItem('groqApiKey');
+            if (!state.apiKey) { showScreen('apiKey'); return; }
+            migrateOldData();
+            showScreen('characterHub');
+        } catch(e) {
+            const msgs = { 'auth/user-not-found':'Usuario no encontrado.', 'auth/wrong-password':'Contraseña incorrecta.', 'auth/invalid-email':'Email inválido.', 'auth/invalid-credential':'Email o contraseña incorrectos.' };
+            errEl.textContent = msgs[e.code] || e.message;
+            errEl.style.display = 'block';
+        }
+    });
+
+    document.getElementById('registerBtn').addEventListener('click', async () => {
+        const email = document.getElementById('regEmail').value.trim();
+        const pass = document.getElementById('regPassword').value;
+        errEl.style.display = 'none';
+        try {
+            const cred = await fbAuth.createUserWithEmailAndPassword(email, pass);
+            fbUser = cred.user;
+            state.apiKey = localStorage.getItem('groqApiKey');
+            if (!state.apiKey) { showScreen('apiKey'); return; }
+            showScreen('characterHub');
+        } catch(e) {
+            const msgs = { 'auth/email-already-in-use':'Este email ya está registrado.', 'auth/weak-password':'La contraseña debe tener al menos 6 caracteres.', 'auth/invalid-email':'Email inválido.' };
+            errEl.textContent = msgs[e.code] || e.message;
+            errEl.style.display = 'block';
+        }
+    });
+
+    document.getElementById('resetFbBtn').addEventListener('click', () => {
+        localStorage.removeItem('fbConfig');
+        fbApp = null; fbDb = null; fbAuth = null; fbUser = null;
+        showScreen('firebaseSetup');
+    });
+}
+
 // ===================== BINDINGS =====================
 function bindApiKeyScreen() {
     document.getElementById('saveApiKeyBtn').addEventListener('click', () => {
@@ -429,6 +665,7 @@ function bindCharacterHub() {
                 localStorage.removeItem('dndGameState_' + id);
                 localStorage.removeItem('dndChatHistory_' + id);
                 localStorage.removeItem('dndAdventure_' + id);
+                fsDeleteCharacter(id);
                 modal.classList.add('hidden');
                 showScreen('characterHub');
             };
@@ -542,6 +779,12 @@ function bindChat() {
     // Menu
     document.getElementById('menuBtn').addEventListener('click', () => document.getElementById('menuModal').classList.toggle('hidden'));
     document.getElementById('closeMenuBtn').addEventListener('click', () => document.getElementById('menuModal').classList.add('hidden'));
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+        if (!confirm('¿Cerrar sesión?')) return;
+        try { await fbAuth.signOut(); } catch(e) {}
+        fbUser = null;
+        showScreen('auth');
+    });
     document.getElementById('switchCharBtn').addEventListener('click', () => { document.getElementById('menuModal').classList.add('hidden'); showScreen('characterHub'); });
     document.getElementById('newAdventureBtn').addEventListener('click', () => {
         state.chatHistory = []; state.adventure = null;
@@ -957,4 +1200,4 @@ async function summarizeContext() {
     } catch(e) { console.warn(e); }
 }
 
-init();
+loadFirebaseSDK().then(() => init());
