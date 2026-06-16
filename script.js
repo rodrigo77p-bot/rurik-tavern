@@ -842,16 +842,8 @@ function bindChat() {
         const action = playerInput.value.trim();
         if (!action || state.pendingRoll) return;
         playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...'; playerInput.value = '';
-        const rollTrigger = detectRoll(action);
-        const msgIdx = state.chatHistory.length;
-        if (rollTrigger) {
-            addPlayerMessage(action, null, 'pending', msgIdx);
-            state.pendingRoll = { action, trigger: rollTrigger, msgIdx };
-            playerInput.disabled = false; sendBtn.disabled = false; sendBtn.textContent = 'Enviar';
-        } else {
-            addPlayerMessage(action, null, 'done', msgIdx);
-            await callAndRespond(action, null);
-        }
+        addPlayerMessage(action, null, 'done');
+        await callAndRespond(action, null);
     }
 
     // Use touchend on mobile for instant response, click as fallback
