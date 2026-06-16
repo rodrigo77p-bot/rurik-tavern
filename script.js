@@ -93,16 +93,33 @@ const CLASS_ICONS = { 'Guerrero':'⚔️','Mago':'🔮','Pícaro':'🗡️','Cl�
 const STATUS_LABELS = { alive:'Vivo', dead:'Muerto', cursed:'Maldito' };
 
 // ===================== PORTRAIT GENERATION =====================
+const RACE_VISUALS = {
+    'Humano':'human',
+    'Elfo':'elf with pointed ears, ethereal beauty',
+    'Enano':'dwarf, stocky and sturdy',
+    'Mediano':'halfling, small and cheerful',
+    'Tiefling':'tiefling with small demon horns and glowing eyes',
+    'Vampiro':'vampire with pale skin, sharp fangs and dark eyes',
+    'Hada':'fairy with delicate pointed ears, ethereal iridescent skin, luminous glow, butterfly-like wings',
+    'Fauno':'faun with small horns and goat features',
+    'Dragonborn':'dragonborn with dragon scales and reptilian features',
+    'Orco':'orc with green skin, tusks and powerful build',
+    'Semiélfico':'half-elf with slightly pointed ears',
+    'Gnomo':'gnome with large curious eyes'
+};
+
 function getPortraitUrl(char, size=512) {
     if (!char) return '';
-    const parts = [char.race, char.classe, char.gender||'', char.appearance||''].filter(Boolean).join(', ');
-    const prompt = encodeURIComponent(`oil painting portrait, ${parts}, colorful fantasy art, warm vibrant colors, half body, painterly brushstrokes, renaissance fantasy style, vivid dramatic lighting, richly detailed, masterpiece`);
+    const raceVisual = RACE_VISUALS[char.race] || char.race;
+    const appearance = char.appearance ? char.appearance + ', ' : '';
+    const gender = char.gender && char.gender !== 'Otro' ? char.gender === 'Mujer' ? 'woman' : 'man' : '';
+    const prompt = encodeURIComponent(`fantasy character portrait, ${gender} ${raceVisual} ${char.classe}, ${appearance}semi-realistic digital painting, highly detailed face and eyes, dramatic cinematic lighting, dark moody background with warm rim light, intricate fantasy costume with fine details, artstation trending, D&D character art, 8k resolution, professional illustration`);
     const seed = char.portraitSeed || 42;
     return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
 }
 function getCompanionPortraitUrl(companion, size=256) {
-    const desc = [companion.name, companion.role||'', companion.description||''].filter(Boolean).join(', ');
-    const prompt = encodeURIComponent(`oil painting portrait, ${desc}, colorful fantasy art, warm vibrant colors, half body, painterly brushstrokes, renaissance fantasy style, vivid dramatic lighting, richly detailed`);
+    const desc = companion.description ? companion.description + ', ' : '';
+    const prompt = encodeURIComponent(`fantasy character portrait, ${companion.name} ${companion.role||''}, ${desc}semi-realistic digital painting, highly detailed face, dramatic cinematic lighting, dark moody background, intricate fantasy costume, artstation trending, D&D character art`);
     const seed = companion.portraitSeed || (companion.name.split('').reduce((a,c)=>a+c.charCodeAt(0),0) * 17 % 99999);
     return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
 }
