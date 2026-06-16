@@ -295,10 +295,31 @@ function renderAdventureSelectionScreen() {
 function renderChatScreen() {
     return `<div class="game-wrapper">
         <div class="status-bar">
+            <button class="menu-btn" id="menuBtn" title="Menú">☰</button>
             <div>❤️ <span id="hpDisplay">${state.gameState.hp}/${state.gameState.maxHp}</span></div>
             <div>📍 <span id="locationDisplay">${state.gameState.location}</span></div>
             <div>🌙 <span id="timeDisplay">${state.gameState.timeOfDay}</span></div>
             <div>🎒 <span id="inventoryDisplay">${state.gameState.inventory.join(', ') || 'Vacío'}</span></div>
+        </div>
+        <div id="menuModal" class="modal hidden">
+            <div class="modal-box">
+                <div class="modal-title">Menú</div>
+                <button class="modal-btn" id="newAdventureBtn">🗺️ Nueva Aventura (mismo personaje)</button>
+                <button class="modal-btn" id="newCharacterBtn">⚔️ Nuevo Personaje (reinicio total)</button>
+                <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
+                <button class="modal-btn danger" id="closeMenuBtn">✕ Cerrar</button>
+            </div>
+        </div>
+        <div id="inventoryModal" class="modal hidden">
+            <div class="modal-box">
+                <div class="modal-title">🎒 Inventario</div>
+                <div id="inventoryList" class="inv-list"></div>
+                <div class="inv-add-row">
+                    <input type="text" id="newItemInput" placeholder="Nuevo objeto..." class="inv-input">
+                    <button class="modal-btn small" id="addItemBtn">+ Añadir</button>
+                </div>
+                <button class="modal-btn" id="closeInvBtn" style="margin-top:0.5rem">✓ Cerrar</button>
+            </div>
         </div>
         <div class="game-layout">
             <div class="chat-area">
@@ -431,7 +452,82 @@ function bindChat() {
 
     sendBtn.addEventListener('click', sendMessage);
     playerInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
+
+    // Menu
+    document.getElementById('menuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.toggle('hidden');
+    });
+    document.getElementById('closeMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden');
+    });
+    document.getElementById('newAdventureBtn').addEventListener('click', () => {
+        state.chatHistory = [];
+        state.adventure = null;
+        state.gameState.companions = [];
+        state.gameState.relationships = {};
+        state.gameState.skillUses = { combat: 0, magic: 0, stealth: 0, social: 0, nature: 0 };
+        state.gameState.classEvolution = '';
+        state.gameState.summary = '';
+        state.turnCount = 0;
+        localStorage.removeItem('dndAdventure');
+        localStorage.removeItem('dndChatHistory');
+        localStorage.setItem('dndGameState', JSON.stringify(state.gameState));
+        showScreen('adventureSelection');
+    });
+    document.getElementById('newCharacterBtn').addEventListener('click', () => {
+        if (confirm('¿Seguro? Se borrará el personaje y toda la partida.')) {
+            localStorage.clear();
+            location.reload();
+        }
+    });
+    document.getElementById('manageInventoryBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden');
+        openInventoryModal();
+    });
+    document.getElementById('closeInvBtn').addEventListener('click', () => {
+        document.getElementById('inventoryModal').classList.add('hidden');
+    });
+    document.getElementById('addItemBtn').addEventListener('click', () => {
+        const input = document.getElementById('newItemInput');
+        const item = input.value.trim();
+        if (item) {
+            state.gameState.inventory.push(item);
+            input.value = '';
+            renderInventoryModal();
+            updateStatus();
+            saveGameState();
+        }
+    });
+    document.getElementById('newItemInput').addEventListener('keypress', e => {
+        if (e.key === 'Enter') document.getElementById('addItemBtn').click();
+    });
 }
+
+function openInventoryModal() {
+    document.getElementById('inventoryModal').classList.remove('hidden');
+    renderInventoryModal();
+}
+
+function renderInventoryModal() {
+    const list = document.getElementById('inventoryList');
+    if (!list) return;
+    if (state.gameState.inventory.length === 0) {
+        list.innerHTML = '<div class="inv-empty">El inventario está vacío</div>';
+        return;
+    }
+    list.innerHTML = state.gameState.inventory.map((item, i) =>
+        `<div class="inv-item">
+            <span>${item}</span>
+            <button class="inv-remove" onclick="removeItem(${i})">✕</button>
+        </div>`
+    ).join('');
+}
+
+window.removeItem = function(idx) {
+    state.gameState.inventory.splice(idx, 1);
+    renderInventoryModal();
+    updateStatus();
+    saveGameState();
 
 // ===================== CHAT RENDERING =====================
 function renderChat() {
@@ -718,3 +814,8 @@ function saveGameState() {
 }
 
 init();
+
+// Patch: add menu and inventory management
+// Override renderChatScreen to include menu button
+const _origRenderChatScreen = renderChatScreen;
+// Already defined above, just need to patch via script additions
