@@ -243,6 +243,9 @@ const state = {
     pendingRoll: null
 };
 
+// Debug configuration
+const DEBUG_IA_COMMUNICATION = false; // Set to true to enable debug logging
+
 const appDiv = document.getElementById('app');
 
 // ===================== ROLL SYSTEM =====================
@@ -257,6 +260,156 @@ function guessStatFromSkill(skill) {
     };
     return map[skill] || 'DES';
 }
+
+function guessSkillCategory(skill) {
+    const categoryMap = {
+        'Persuasión':'social','Carisma':'social','Engaño':'social','Intimidación':'social','Seducción':'social','Actuación':'social',
+        'Sigilo':'stealth','Acrobacias':'stealth','Hurto':'stealth','Destreza':'stealth',
+        'Fuerza':'combat','Atletismo':'combat','Ataque':'combat','Combate':'combat',
+        'Magia':'magic','Arcanos':'magic','Historia':'magic','Investigación':'magic','Conocimiento':'magic',
+        'Percepción':'nature','Medicina':'nature','Naturaleza':'nature','Supervivencia':'nature','Intuición':'nature',
+        'Constitución':'nature','Resistencia':'nature'
+    };
+    return categoryMap[skill] || 'combat'; // default to combat for unknown skills
+}
+
+function guessRequiredRoll(action) {
+    const actionLower = action.toLowerCase();
+
+    // Social actions requiring CAR
+    const socialActions = ['convencer', 'seducir', 'intimidar', 'mentir', 'pedir favor', 'flirtear', 'persuadir', 'engañar', 'actuar'];
+    if (socialActions.some(word => actionLower.includes(word))) {
+        return { skill: actionLower.includes('persuadir') || actionLower.includes('engañar') || actionLower.includes('actuar') ? 'Persuasión' :
+                  actionLower.includes('seducir') || actionLower.includes('flirtear') ? 'Seducción' :
+                  actionLower.includes('intimidar') ? 'Intimidación' :
+                  actionLower.includes('mentir') ? 'Engaño' :
+                  'Persuasión', stat: 'CAR' };
+    }
+
+    // Combat actions requiring FUE or DES
+    const combatActions = ['atacar', 'pelear', 'golpear', 'disparar', 'atacar a distancia'];
+    if (combatActions.some(word => actionLower.includes(word))) {
+        // Determine if ranged or melee
+        if (actionLower.includes('distancia') || actionLower.includes('arco') || actionLower.includes('disparar')) {
+            return { skill: 'Destreza', stat: 'DES' };
+        } else {
+            return { skill: 'Fuerza', stat: 'FUE' };
+        }
+    }
+
+    // Stealth actions requiring DES
+    const stealthActions = ['esconderse', 'moverse sin ser visto', 'robar', 'sigilo'];
+    if (stealthActions.some(word => actionLower.includes(word))) {
+        return { skill: 'Sigilo', stat: 'DES' };
+    }
+
+    // Magic actions requiring INT
+    const magicActions = ['lanzar magia', 'hechizo', 'conjuro', 'magia'];
+    if (magicActions.some(word => actionLower.includes(word))) {
+        return { skill: 'Magia', stat: 'INT' };
+    }
+
+    // Investigation actions requiring SAB or INT
+    const investigationActions = ['buscar', 'investigar', 'examinar', 'investigar'];
+    if (investigationActions.some(word => actionLower.includes(word))) {
+        // Default to SAB for general investigation, but could be INT for lore
+        return actionLower.includes('historia') || actionLower.includes('lore') || actionLower.includes('identificar') || actionLower.includes('decifrar') ?
+               { skill: 'Investigación', stat: 'INT' } :
+               { skill: 'Percepción', stat: 'SAB' };
+    }
+
+    // Perception actions requiring SAB
+    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir'];
+    if (perceptionActions.some(word => actionLower.includes(word))) {
+        return { skill: 'Percepción', stat: 'SAB' };
+    }
+
+    // Athletic actions requiring FUE or DES
+    const athleticActions = ['saltar', 'trepar', 'correr', 'forzar'];
+    if (athleticActions.some(word => actionLower.includes(word))) {
+        // Default to FUE for strength-based, DES for agility-based
+        return actionLower.includes('trepar') || actionLower.includes('correr') ?
+               { skill: 'Acrobacias', stat: 'DES' } :
+               { skill: 'Atletismo', stat: 'FUE' };
+    }
+
+    // Resistance actions requiring CON
+    const resistanceActions = ['resistir veneno', 'resistir dolor', 'resistir miedo', 'resistir'];
+    if (resistanceActions.some(word => actionLower.includes(word))) {
+        return { skill: 'Resistencia', stat: 'CON' };
+    }
+
+    // Knowledge actions requiring INT
+    const knowledgeActions = ['recordar lore', 'descifrar', 'identificar', 'conocimiento'];
+    if (knowledgeActions.some(word => actionLower.includes(word))) {
+        return { skill: 'Conocimiento', stat: 'INT' };
+    }
+
+    // Healing actions requiring SAB
+    const healingActions = ['curar', 'atender heridas', 'curar heridas'];
+    if (healingActions.some(word => actionLower.includes(word))) {
+        return { skill: 'Medicina', stat: 'SAB' };
+    }
+
+    // Default to no roll for movement without obstacles, thoughts, passive actions
+    return null;
+}
+
+function validateStateUpdates(stateUpdates) {
+    if (!stateUpdates || typeof stateUpdates !== 'object') return;
+
+    // Validate location
+    if (stateUpdates.location !== undefined) {
+        if (typeof stateUpdates.location !== 'string' || stateUpdates.location.trim() === '') {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid location in stateUpdates:', stateUpdates.location);
+            }
+        }
+    }
+
+    // Validate HP
+    if (stateUpdates.hp !== undefined) {
+        if (typeof stateUpdates.hp !== 'number' || stateUpdates.hp < 0) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid HP in stateUpdates:', stateUpdates.hp);
+            }
+        }
+        // Note: We don't validate against maxHp here because maxHp might be updated in the same batch
+    }
+
+    // Validate timeOfDay
+    if (stateUpdates.timeOfDay !== undefined) {
+        if (typeof stateUpdates.timeOfDay !== 'string' || stateUpdates.timeOfDay.trim() === '') {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid timeOfDay in stateUpdates:', stateUpdates.timeOfDay);
+            }
+        }
+    }
+
+    // Validate inventory
+    if (stateUpdates.inventory !== undefined) {
+        if (!Array.isArray(stateUpdates.inventory)) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid inventory in stateUpdates: not an array', stateUpdates.inventory);
+            }
+        }
+    }
+
+    // Validate that we're not setting both hp and maxHp to invalid combinations
+    if (stateUpdates.hp !== undefined && stateUpdates.maxHp !== undefined) {
+        if (stateUpdates.hp < 0 || stateUpdates.maxHp < 0) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Negative HP or maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
+            }
+        }
+        if (stateUpdates.hp > stateUpdates.maxHp) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('HP exceeds maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
+            }
+        }
+    }
+}
+
 function rollD20(statValue, dc) {
     const roll = Math.floor(Math.random()*20)+1;
     const mod = Math.floor((statValue-10)/2);
@@ -272,11 +425,8 @@ window.executeRoll = async function(dmMsgIdx) {
     const result = { ...rollD20(statVal, trigger.dc), skill: trigger.skill };
 
     // Track skill usage
-    if (['Ataque','Combate','Fuerza','Atletismo'].includes(trigger.skill)) state.gameState.skillUses.combat++;
-    else if (['Magia','Arcanos'].includes(trigger.skill)) state.gameState.skillUses.magic++;
-    else if (['Sigilo','Hurto','Acrobacias'].includes(trigger.skill)) state.gameState.skillUses.stealth++;
-    else if (['Persuasión','Carisma','Intimidación','Engaño','Seducción'].includes(trigger.skill)) state.gameState.skillUses.social++;
-    else if (['Naturaleza','Medicina','Supervivencia'].includes(trigger.skill)) state.gameState.skillUses.nature++;
+    const category = guessSkillCategory(trigger.skill);
+    state.gameState.skillUses[category]++;
     updateClassEvolution();
 
     // Update DM message to show roll result inline
@@ -299,14 +449,39 @@ window.executeRoll = async function(dmMsgIdx) {
 };
 
 function updateClassEvolution() {
-    const { combat, magic, stealth, social } = state.gameState.skillUses;
+    const { combat, magic, stealth, social, nature } = state.gameState.skillUses;
     const cls = state.character.classe;
     let evo = '';
+
+    // Guerrero evolutions
     if (magic>=5 && cls==='Guerrero') evo='Guerrero Arcano';
+    else if (nature>=5 && cls==='Guerrero') evo='Cazador';
+    else if (combat>=3 && nature>=3 && cls==='Guerrero') evo='Guerrero de la Naturaleza';
+
+    // Mago evolutions
     else if (combat>=5 && cls==='Mago') evo='Mago de Batalla';
+    else if (nature>=5 && cls==='Mago') evo='Hechicero de la Naturaleza';
+    else if (stealth>=3 && nature>=3 && cls==='Mago') evo='Mago Sigiloso';
+
+    // Pícaro evolutions
     else if (social>=5 && cls==='Pícaro') evo='Maestro Manipulador';
+    else if (nature>=5 && cls==='Pícaro') evo='Rastreador';
+    else if (combat>=3 && nature>=3 && cls==='Pícaro') evo='Pícaro Cazador';
+
+    // Explorador evolutions (if base class is Explorador)
+    else if (nature>=5 && cls==='Explorador') evo='Explorador Maestro';
+    else if (combat>=4 && cls==='Explorador') evo='Explorador Guerreriza';
+
+    // Cleric evolutions
+    else if (nature>=5 && cls==='Clérigo') evo='Druida';
+    else if (combat>=3 && nature>=3 && cls==='Clérigo') evo='Clérigo de la Guerra';
+
+    // General combinations
     else if (combat>=3 && stealth>=3) evo='Sombra Luchadora';
     else if (social>=4 && magic>=3) evo='Bardo Arcano';
+    else if (magic>=3 && nature>=3) evo='Hechicero Sabio';
+    else if (combat>=3 && social>=3) evo='Líder Carismático';
+
     state.gameState.classEvolution = evo;
 }
 
@@ -833,7 +1008,7 @@ function bindAdventureSelection() {
             const worldNote = worldEvents.length > 0 ? `\n\n${worldEvents.map(e=>`Nota del narrador: ${e.event}`).join('\n')}` : '';
             const opener = adv.startScene
                 ? `${adv.startScene}${worldNote}\n\nTú eres ${char.name}, ${char.race} ${char.classe}${char.motivation?', '+char.motivation:''}.\n\n¿Qué haces?`
-                : `La Taberna de Rurik te recibe. Tú eres ${char.name}, ${char.race} ${char.classe}${char.motivation?', '+char.motivation:''}. Grimbold te mira desde la barra.${worldNote}\n\n¿Qué haces?`;
+                : `${adv.location} te recibe. Tú eres ${char.name}, ${char.race} ${char.classe}${char.motivation?', '+char.motivation:''}.\n\n¿Qué haces?`;
             addDMMessage(opener, ['Hablar con el tabernero','Explorar el lugar','Buscar una mesa y observar']);
         });
     });
@@ -1283,12 +1458,61 @@ async function callAndRespond(action, rollResult) {
 
     try {
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
-        const response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
-        const { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate } = parseLlmResponse(response);
+        let response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
+
+        // Debug logging
+        if (DEBUG_IA_COMMUNICATION) {
+            console.log('IA RAW RESPONSE:', response);
+        }
+
+        let { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate } = parseLlmResponse(response);
+
+        // Debug logging
+        if (DEBUG_IA_COMMUNICATION) {
+            console.log('PARSED IA RESPONSE:', { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate });
+        }
+
+        // Fallback: if IA didn't request a roll but we think it should have, try again with more explicit instructions
+        if (!rollRequest) {
+            const suggestedRoll = guessRequiredRoll(action);
+            if (suggestedRoll) {
+                // Create a more insistent user prompt that explicitly asks for a roll
+                const insistentAction = `${action}\n\nIMPORTANTE: Esta acción claramente requiere una tirada de dados. Por favor, incluye un bloque [ROLL:] en tu respuesta con la skill, stat, dc y razón adecuados.`;
+                const insistentResponse = await Promise.race([callGroqApi(insistentAction, rollResult), timeoutPromise]);
+
+                // Debug logging
+                if (DEBUG_IA_COMMUNICATION) {
+                    console.log('IA RESPONSE TO INSISTENT PROMPT:', insistentResponse);
+                }
+
+                const { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate } = parseLlmResponse(insistentResponse);
+
+                // Debug logging
+                if (DEBUG_IA_COMMUNICATION) {
+                    console.log('PARSED INSISTENT IA RESPONSE:', { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate });
+                }
+
+                // Use the insistent response if it provided a roll request, otherwise stick with original
+                if (insistentRollRequest) {
+                    narration = insistentNarration;
+                    stateUpdates = insistentStateUpdates;
+                    actions = insistentActions;
+                    legacy = insistentLegacy;
+                    deathNarration = insistentDeathNarration;
+                    rollRequest = insistentRollRequest;
+                    npcUpdate = insistentNpcUpdate;
+                    if (insistentNpcUpdate) processNpcUpdate(insistentNpcUpdate);
+                }
+            }
+        }
+
         if (npcUpdate) processNpcUpdate(npcUpdate);
         document.getElementById('typingIndicator')?.remove();
 
         if (stateUpdates) {
+            // Validate state updates for debugging
+            validateStateUpdates(stateUpdates);
+
             Object.assign(state.gameState, stateUpdates);
             if (!state.gameState.companions) state.gameState.companions = [];
             if (!state.gameState.relationships) state.gameState.relationships = {};
@@ -1390,6 +1614,7 @@ INSTRUCCIONES:
 - Romance, seducción y relaciones pueden desarrollarse naturalmente.
 - Si el jugador muere (hp=0), narra una muerte épica.
 - Termina en momento de decisión o antes del bloque de tirada.
+- AVANZA LA HISTORIA: Cuando sea apropiado, cambia de ubicación y avanza la trama. Usa bloques [STATE:] para reflejar cambios en ubicación, hora del día, y otros aspectos del estado del juego. No te quedes estancado en un solo lugar sin razón narrativa.
 
 SISTEMA DE DADOS (CRÍTICO — SIGUE ESTO SIEMPRE):
 CASI TODA acción requiere tirada. Pide [ROLL] SIEMPRE en estos casos:
@@ -1434,7 +1659,7 @@ async function callGroqApi(playerAction, rollResult) {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method:'POST',
         headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
-        body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:[{role:'system',content:system},{role:'user',content:user}], temperature:0.85, max_tokens:1000 })
+        body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:[{role:'system',content:system},{role:'user',content:user}], temperature:0.7, max_tokens:1000 })
     });
     if (!response.ok) { const e = await response.text(); throw new Error(`Groq ${response.status}: ${e}`); }
     const data = await response.json();
@@ -1522,13 +1747,37 @@ function parseLlmResponse(response) {
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
     const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\])\]/);
-    if (actionsMatch) { try { actions = JSON.parse(actionsMatch[1]); } catch(e) {} narration = narration.replace(actionsMatch[0],'').trim(); }
+    if (actionsMatch) {
+        try {
+            actions = JSON.parse(actionsMatch[1]);
+        } catch(e) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Failed to parse ACTIONS block:', actionsMatch[1], e);
+            }
+        }
+    narration = narration.replace(actionsMatch[0],'').trim(); }
 
     const stateMatch = response.match(/\[STATE:\s*(\{[\s\S]*?\})\]/);
-    if (stateMatch) { try { stateUpdates = JSON.parse(stateMatch[1]); } catch(e) {} narration = narration.replace(stateMatch[0],'').trim(); }
+    if (stateMatch) {
+        try {
+            stateUpdates = JSON.parse(stateMatch[1]);
+        } catch(e) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Failed to parse STATE block:', stateMatch[1], e);
+            }
+        }
+    narration = narration.replace(stateMatch[0],'').trim(); }
 
     const legacyMatch = response.match(/\[LEGACY:\s*(\{[\s\S]*?\})\]/);
-    if (legacyMatch) { try { legacy = JSON.parse(legacyMatch[1]); } catch(e) {} narration = narration.replace(legacyMatch[0],'').trim(); }
+    if (legacyMatch) {
+        try {
+            legacy = JSON.parse(legacyMatch[1]);
+        } catch(e) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Failed to parse LEGACY block:', legacyMatch[1], e);
+            }
+        }
+    narration = narration.replace(legacyMatch[0],'').trim(); }
 
     const rollMatch = response.match(/\[ROLL:\s*(\{[\s\S]*?\})\]/);
     if (rollMatch) {
@@ -1540,7 +1789,11 @@ function parseLlmResponse(response) {
                 dc: parseInt(r.dc) || 12,
                 reason: r.reason || ''
             };
-        } catch(e) {}
+        } catch(e) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Failed to parse ROLL block:', rollMatch[1], e);
+            }
+        }
         narration = narration.replace(rollMatch[0],'').trim();
     }
 
@@ -1551,7 +1804,13 @@ function parseLlmResponse(response) {
     const npcMatch = response.match(/\[NPC:\s*(\{[\s\S]*?\})\]/);
     let npcUpdate = null;
     if (npcMatch) {
-        try { npcUpdate = JSON.parse(npcMatch[1]); } catch(e) {}
+        try {
+            npcUpdate = JSON.parse(npcMatch[1]);
+        } catch(e) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Failed to parse NPC block:', npcMatch[1], e);
+            }
+        }
         narration = narration.replace(npcMatch[0],'').trim();
     }
 
