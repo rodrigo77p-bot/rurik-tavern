@@ -462,8 +462,9 @@ function guessRequiredRoll(action) {
     }
 
     // Perception actions requiring SAB
-    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo', 'ecuchar', 'escucho', 'escuchó', 'escuchais', 'escuchan', 'oía', 'oías', 'oímos', 'oían', 'oíste', 'oísteis', 'escuchamos', 'escuchad', 'escuchas', 'escucha', 'oigo', 'oyes', 'oye', 'oís', 'oyen', 'oigo', 'oyes', 'oye', 'ois', 'oyen', 'mirar', 'mira', 'miras', 'mira', 'miramos', 'miran', 'mirando', 'observar', 'observa', 'observas', 'observa', 'observamos', 'observan', 'observando', 'ver', 'veo', 'ves', 've', 'vemos', 'ven', 'viendo'];
-    if (perceptionActions.some(word => actionLower.includes(word))) {
+    // Using root-based detection for Spanish perception verbs
+    const perceptionRoots = ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui'];
+    if (perceptionRoots.some(root => actionLower.includes(root))) {
         // Determine DC based on context clues in the action
         let dc = 12; // Default moderate
         let reason = "Check de percepción";
@@ -1831,8 +1832,8 @@ async function callAndRespond(action, rollResult) {
             const suggestedRoll = guessRequiredRoll(action);
             // Backup detection for perception/action keywords that might be missed by guessRequiredRoll
             const actionLower = action.toLowerCase();
-            const strongPerceptionKeywords = ['escuch', 'oír', 'oyer', 'oia', 'oio', 'oido', 'oir', 'ver', 'mirar', 'detectar', 'sentir', 'percibir', 'intuir'];
-            const hasStrongKeyword = strongPerceptionKeywords.some(kw => actionLower.includes(kw));
+            const strongPerceptionRoots = ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui'];
+            const hasStrongKeyword = strongPerceptionRoots.some(root => actionLower.includes(root));
 
             if (suggestedRoll || hasStrongKeyword) {
                 // If we have a suggested roll from guessRequiredRoll, use it
