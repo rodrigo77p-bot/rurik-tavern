@@ -1624,6 +1624,7 @@ CASI TODA acción requiere tirada. Pide [ROLL] SIEMPRE en estos casos:
 - Lanzar magia, hechizos, conjuros → INT
 - Buscar algo, investigar, examinar → SAB o INT
 - Percibir peligro, intuir mentiras, detectar algo → SAB
+- ESCUCHAR CONVERSACIONES u OÍR sonidos leves/bajos → SAB
 - Saltar, trepar, correr, forzar → FUE o DES
 - Resistir veneno/dolor/miedo → CON
 - Recordar lore, descifrar, identificar → INT
