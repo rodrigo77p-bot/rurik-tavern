@@ -319,7 +319,7 @@ function guessRequiredRoll(action) {
     }
 
     // Perception actions requiring SAB
-    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo', 'ecuchar', 'escucho', 'escuchó', 'escuchais', 'escuchan', 'oía', 'oías', 'oímos', 'oían', 'oíste', 'oísteis', 'escuchamos', 'escuchad', 'escuchas', 'escucha', 'oigo', 'oyes', 'oye', 'oís', 'oyen', 'oigo', 'oyes', 'oye', 'ois', 'oyen'];
+    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo', 'ecuchar', 'escucho', 'escuchó', 'escuchais', 'escuchan', 'oía', 'oías', 'oímos', 'oían', 'oíste', 'oísteis', 'escuchamos', 'escuchad', 'escuchas', 'escucha', 'oigo', 'oyes', 'oye', 'oís', 'oyen', 'oigo', 'oyes', 'oye', 'ois', 'oyen', 'mirar', 'mira', 'miras', 'mira', 'miramos', 'miran', 'mirando', 'observar', 'observa', 'observas', 'observa', 'observamos', 'observan', 'observando', 'ver', 'veo', 'ves', 've', 'vemos', 'ven', 'viendo'];
     if (perceptionActions.some(word => actionLower.includes(word))) {
         return { skill: 'Percepción', stat: 'SAB' };
     }
@@ -1097,6 +1097,20 @@ function bindChat() {
         const action = playerInput.value.trim();
         if (!action) return;
         state.pendingRoll = null; // clear any stale roll
+
+        // Check if action requires a roll BEFORE sending to AI
+        const suggestedRoll = guessRequiredRoll(action);
+        if (suggestedRoll) {
+            // We know a roll is needed, so set up pending roll immediately
+            state.pendingRoll = { trigger: suggestedRoll };
+            // Disable input while waiting for roll
+            playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...';
+            addPlayerMessage(action, null, 'pending'); // Show roll button immediately
+            // Don't call AI yet - wait for user to roll first
+            return;
+        }
+
+        // If no roll needed, proceed normally
         playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...'; playerInput.value = '';
         addPlayerMessage(action, null, 'done');
         await callAndRespond(action, null);
@@ -1632,6 +1646,7 @@ CASI TODA acción requiere tirada. Pide [ROLL] SIEMPRE en estos casos:
 - Buscar algo, investigar, examinar → SAB o INT
 - Percibir peligro, intuir mentiras, detectar algo → SAB
 - ESCUCHAR CUALQUIER CONVERSACIÓN u OÍR SONIDOS → SAB (SIEMPRE requiere tirada)
+- MIRAR, VER u OBSERVAR CON INTENCIÓN → SAB (SIEMPRE requiere tirada)
 - Saltar, trepar, correr, forzar → FUE o DES
 - Resistir veneno/dolor/miedo → CON
 - Recordar lore, descifrar, identificar → INT
