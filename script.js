@@ -1182,6 +1182,49 @@ function bindAuthScreen() {
     });
 }
 
+function generateDefaultActions() {
+    const location = state.gameState.location || 'este lugar';
+    const timeOfDay = state.gameState.timeOfDay || 'momento actual';
+
+    // Intentar obtener nombre de compañero si está disponible
+    let companionName = null;
+    if (state.gameState.companions && state.gameState.companions.length > 0) {
+        companionName = state.gameState.companions[0].name;
+    }
+
+    // Intentar obtener nombre de NPC de relaciones si está disponible
+    let npcName = null;
+    if (state.gameState.relationships) {
+        for (const [name, rel] of Object.entries(state.gameState.relationships)) {
+            if (rel.level > 0) { // relación positiva
+                npcName = name;
+                break;
+            }
+        }
+    }
+
+    // Construir tres acciones predeterminadas
+    const actions = [];
+
+    // Acción 1: Interacción social
+    if (companionName) {
+        actions.push(`Hablar con ${companionName}`);
+    } else if (npcName) {
+        actions.push(`Acercarse a ${npcName}`);
+    } else {
+        actions.push(`Hablar con alguien en ${location}`);
+    }
+
+    // Acción 2: Exploración
+    actions.push(`Explorar los alrededores de ${location}`);
+
+    // Acción 3: Observación o verificación de estado
+    actions.push(`Observar con atención lo que sucede`);
+
+    // Asegurar que tengamos exactamente tres acciones
+    return actions.slice(0, 3);
+}
+
 // ===================== BINDINGS =====================
 function bindApiKeyScreen() {
     document.getElementById('saveApiKeyBtn').addEventListener('click', () => {
@@ -1828,6 +1871,15 @@ async function callAndRespond(action, rollResult) {
         if (npcUpdate) processNpcUpdate(npcUpdate);
         document.getElementById('typingIndicator')?.remove();
 
+        // Ensure companions and relationships are initialized
+        if (!state.gameState.companions) state.gameState.companions = [];
+        if (!state.gameState.relationships) state.gameState.relationships = {};
+
+        // Ensure we have actions to show the user
+        if (!actions || actions.length === 0) {
+            actions = generateDefaultActions();
+        }
+
         if (stateUpdates) {
             // Validate state updates for debugging
             validateStateUpdates(stateUpdates);
@@ -1842,7 +1894,7 @@ async function callAndRespond(action, rollResult) {
         // If AI requests a roll, mark the DM message and set pendingRoll
         if (rollRequest) {
             const dmMsgIdx = state.chatHistory.length;
-            const dmMsg = { role:'dm', content:narration, actions:[], location:state.gameState.location, time:state.gameState.timeOfDay, rollPending:true };
+            const dmMsg = { role:'dm', content:narration, actions:actions, location:state.gameState.location, time:state.gameState.timeOfDay, rollPending:true };
             state.chatHistory.push(dmMsg);
             state.pendingRoll = { trigger: rollRequest };
             const container = document.getElementById('chatContainer');
