@@ -1926,8 +1926,17 @@ async function callAndRespond(action, rollResult) {
     } catch(err) {
         console.error(err);
         document.getElementById('typingIndicator')?.remove();
-        const isTimeout = err.message === 'timeout';
-        addDMMessage(isTimeout ? 'La conexión tardó demasiado. Intenta enviar tu acción de nuevo.' : 'El humo de la taberna nubla la visión. Inténtalo de nuevo.', []);
+        let errorMessage = 'El humo de la taberna nubla la visión. Inténtalo de nuevo.';
+        if (err.message === 'timeout') {
+            errorMessage = 'La conexión tardó demasiado. Intenta enviar tu acción de nuevo.';
+        } else if (err.message && err.message.includes('Failed to fetch')) {
+            errorMessage = 'No se pudo conectar con el servidor. Verifica tu conexión a internet.';
+        } else if (err.message && err.message.includes('JSON.parse')) {
+            errorMessage = 'La respuesta recibida no era válida. Inténtalo de nuevo.';
+        } else if (err.name === 'TypeError') {
+            errorMessage = 'Ocurrió un error inesperado. Por favor, inténtalo de nuevo.';
+        }
+        addDMMessage(errorMessage, []);
     } finally {
         if (playerInput) { playerInput.disabled = false; }
         if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
@@ -1979,6 +1988,7 @@ ESTADO:
 ${worldSection}${rollSection}
 
 INSTRUCCIONES:
+- **REGLA DE OBLIGATORIO CUMPLIMIENTO**: Cuando veas "[ACTION SELECCIONADA] X" en el prompt del usuario, debes interpretar "X" como la acción que el personaje ha seleccionado realizar. Describe las consecuencias de esa acción sin repetir literalmente "X". Muestra lo que sucede como resultado de esa elección.
 - 60-120 palabras de narración. Conciso, cinematográfico, sin descripciones de entorno innecesarias. Ve al grano.
 - NPCs con nombres y personalidad consistente. Los eventos del mundo son REALES y visibles.
 - Si hay historia del mundo en esta zona, inclúyela naturalmente.
@@ -2032,11 +2042,12 @@ Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo 
         isGameAction = lastDMMessage.actions.some(action => action === playerAction);
     }
 
+    let userContent = playerAction;
     if (isGameAction) {
-        system += `\n\nREGLA DE ACCIONES DE JUEGO: Cuando el usuario selecciona una de las opciones de acción presentadas (mostradas con flechas ↑), interpreta esa selección como la intención del personaje y responde describiendo las consecuencias de esa acción, sin repetir literalmente el texto de la opción seleccionada. En su lugar, muestra lo que sucede como resultado de esa intención.`;
+        userContent = `[ACTION SELECCIONADA] ${playerAction}`;
     }
 
-    return { system, user: playerAction };
+    return { system, user: userContent };
 }
 
 async function callGroqApi(playerAction, rollResult) {
