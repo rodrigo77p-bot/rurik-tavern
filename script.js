@@ -679,9 +679,9 @@ function rollD20(statValue, dc) {
 
 window.executeRoll = async function(dmMsgIdx) {
     if (!state.pendingRoll) return;
-    const { trigger } = state.pendingRoll;
+    const { trigger, statValue } = state.pendingRoll;
     state.pendingRoll = null;
-    const statVal = state.character.stats[trigger.stat] || 10;
+    const statVal = statValue || 10;
     const result = { ...rollD20(statVal, trigger.dc), skill: trigger.skill };
 
     // Track skill usage
@@ -1387,7 +1387,11 @@ function bindChat() {
         const suggestedRoll = guessRequiredRoll(action);
         if (suggestedRoll) {
             // We know a roll is needed, so set up pending roll immediately
-            state.pendingRoll = { trigger: suggestedRoll };
+            const statVal = state.character?.stats[suggestedRoll.stat] || 10;
+            state.pendingRoll = {
+                trigger: suggestedRoll,
+                statValue: statVal
+            };
             // Disable input while waiting for roll
             playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...';
             addPlayerMessage(action, null, 'pending', state.chatHistory.length); // Show roll button immediately
@@ -1618,7 +1622,8 @@ function createMessageEl(msg, idx) {
         let rollHtml = '';
         if (msg.rollState==='pending' && !msg.roll && state.pendingRoll?.trigger) {
             const t = state.pendingRoll.trigger;
-            const mod = Math.floor(((state.character?.stats[t.stat]||10)-10)/2);
+            const statVal = state.pendingRoll?.statValue || 10;
+            const mod = Math.floor(((statVal)-10)/2);
             rollHtml = `<div class="roll-pending"><span class="roll-skill">${t.skill}</span><span class="roll-mod">${mod>=0?'+':''}${mod}</span><span class="roll-dc">DC ${t.dc}</span><button class="roll-btn" onclick="executeRoll(${idx})">→ Tirar</button></div>`;
         } else if (msg.roll) {
             const modDisplay = msg.roll.mod >= 0 ? `+${msg.roll.mod}` : `${msg.roll.mod}`;
