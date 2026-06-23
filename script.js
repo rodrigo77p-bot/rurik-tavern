@@ -689,10 +689,10 @@ window.executeRoll = async function(dmMsgIdx) {
     state.gameState.skillUses[category]++;
     updateClassEvolution();
 
-    // Update DM message to show roll result inline
+    // Update player message to show roll result inline
     if (state.chatHistory[dmMsgIdx]) {
-        state.chatHistory[dmMsgIdx].rollResult = result;
-        state.chatHistory[dmMsgIdx].rollPending = false;
+        state.chatHistory[dmMsgIdx].roll = result;
+        state.chatHistory[dmMsgIdx].rollState = null;
         const container = document.getElementById('chatContainer');
         const existing = container?.querySelector(`[data-idx="${dmMsgIdx}"]`);
         if (existing) existing.replaceWith(createMessageEl(state.chatHistory[dmMsgIdx], dmMsgIdx));
@@ -1388,14 +1388,14 @@ function bindChat() {
             state.pendingRoll = { trigger: suggestedRoll };
             // Disable input while waiting for roll
             playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...';
-            addPlayerMessage(action, null, 'pending'); // Show roll button immediately
+            addPlayerMessage(action, null, 'pending', state.chatHistory.length); // Show roll button immediately
             // Don't call AI yet - wait for user to roll first
             return;
         }
 
         // If no roll needed, proceed normally
         playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...'; playerInput.value = '';
-        addPlayerMessage(action, null, 'done');
+        addPlayerMessage(action, null, 'done', state.chatHistory.length);
         await callAndRespond(action, null);
     }
 
