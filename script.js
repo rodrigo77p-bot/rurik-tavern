@@ -319,7 +319,7 @@ function guessRequiredRoll(action) {
     }
 
     // Perception actions requiring SAB
-    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo'];
+    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo', 'ecuchar', 'escucho', 'escuchó', 'escuchais', 'escuchan', 'oía', 'oías', 'oímos', 'oían', 'oíste', 'oísteis', 'escuchamos', 'escuchad'];
     if (perceptionActions.some(word => actionLower.includes(word))) {
         return { skill: 'Percepción', stat: 'SAB' };
     }
@@ -1624,7 +1624,7 @@ CASI TODA acción requiere tirada. Pide [ROLL] SIEMPRE en estos casos:
 - Lanzar magia, hechizos, conjuros → INT
 - Buscar algo, investigar, examinar → SAB o INT
 - Percibir peligro, intuir mentiras, detectar algo → SAB
-- ESCUCHAR CONVERSACIONES u OÍR sonidos leves/bajos → SAB
+- ESCUCHAR CUALQUIER CONVERSACIÓN u OÍR SONIDOS → SAB (SIEMPRE requiere tirada)
 - Saltar, trepar, correr, forzar → FUE o DES
 - Resistir veneno/dolor/miedo → CON
 - Recordar lore, descifrar, identificar → INT
