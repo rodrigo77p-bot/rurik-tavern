@@ -2025,6 +2025,17 @@ maxRelationship: el TECHO PERMANENTE de relación con este jugador específico. 
 REGLA CRÍTICA: la relación NUNCA puede mejorar solo porque el jugador sea amable. Debe haber acción concreta que justifique el cambio. Un PNJ con biases negativos resiste activamente el carisma del jugador.
 Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo al crear el PNJ. NUNCA incluyas [NPC] si no hay personaje nombrado significativo.`;
 
+    // Añadir regla especial para acciones de juego cuando la entrada corresponde a una opción mostrada
+    const lastDMMessage = state.chatHistory.findLast(msg => msg.role === 'dm');
+    let isGameAction = false;
+    if (lastDMMessage && lastDMMessage.actions && Array.isArray(lastDMMessage.actions)) {
+        isGameAction = lastDMMessage.actions.some(action => action === playerAction);
+    }
+
+    if (isGameAction) {
+        system += `\n\nREGLA DE ACCIONES DE JUEGO: Cuando el usuario selecciona una de las opciones de acción presentadas (mostradas con flechas ↑), interpreta esa selección como la intención del personaje y responde describiendo las consecuencias de esa acción, sin repetir literalmente el texto de la opción seleccionada. En su lugar, muestra lo que sucede como resultado de esa intención.`;
+    }
+
     return { system, user: playerAction };
 }
 
