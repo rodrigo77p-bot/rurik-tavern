@@ -1576,7 +1576,9 @@ async function sendCompanionMessage() {
         companionChats[activeChatCompanion].push({ role:'companion', content: reply });
         renderCompanionChat();
     } catch(e) {
-        companionChats[activeChatCompanion].push({ role:'companion', content:'...(silencio)' });
+        console.warn('Error en chat de compañero:', e);
+        // Mensaje temático pero más informativo
+        companionChats[activeChatCompanion].push({ role:'companion', content:'...*(El compañero parece distraído o no pudo responder en este momento)*...' });
         renderCompanionChat();
     } finally {
         sendBtn.disabled = false; sendBtn.textContent = 'Enviar';
@@ -1928,16 +1930,46 @@ async function callAndRespond(action, rollResult) {
         console.error(err);
         document.getElementById('typingIndicator')?.remove();
         let errorMessage = 'El humo de la taberna nubla la visión. Inténtalo de nuevo.';
+        let isUserActionable = false;
+
         if (err.message === 'timeout') {
-            errorMessage = 'La conexión tardó demasiado. Intenta enviar tu acción de nuevo.';
+            errorMessage = 'La conexión tardó demasiado. El Maestro de Mazmorras está ocupado. Inténtalo de nuevo en unos momentos.';
+            isUserActionable = true;
         } else if (err.message && err.message.includes('Failed to fetch')) {
-            errorMessage = 'No se pudo conectar con el servidor. Verifica tu conexión a internet.';
+            errorMessage = 'No se pudo conectar con el servidor. Verifica tu conexión a internet e inténtalo de nuevo.';
+            isUserActionable = true;
         } else if (err.message && err.message.includes('JSON.parse')) {
-            errorMessage = 'La respuesta recibida no era válida. Inténtalo de nuevo.';
+            errorMessage = 'La respuesta recibida no tenía el formato esperado. Esto puede ser temporal; inténtalo de nuevo.';
+            isUserActionable = true;
         } else if (err.name === 'TypeError') {
-            errorMessage = 'Ocurrió un error inesperado. Por favor, inténtalo de nuevo.';
+            errorMessage = 'Ocurrió un error inesperado en el procesamiento. Por favor, inténtalo de nuevo.';
+            isUserActionable = true;
+        } else if (err.message && err.message.includes('Groq')) {
+            // Handle Groq API specific errors
+            if (err.message.includes('401') || err.message.includes('403')) {
+                errorMessage = 'Error de autenticación con la IA. Verifica que tu API key de Groq sea válida y esté correctamente configurada.';
+                isUserActionable = true;
+            } else if (err.message.includes('429')) {
+                errorMessage = 'Has excedido el límite de solicitudes a la IA. Espera un momento antes de intentarlo de nuevo.';
+                isUserActionable = true;
+            } else if (err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('504')) {
+                errorMessage = 'El servicio de IA está experimentando problemas técnicos. Por favor, inténtalo de nuevo más tarde.';
+                isUserActionable = true;
+            } else {
+                errorMessage = `Error del servicio de IA: ${err.message.replace('Groq ', '')}. Inténtalo de nuevo.`;
+                isUserActionable = true;
+            }
+        } else if (err.message && err.message.includes('parseLlmResponse')) {
+            errorMessage = 'La IA respondió de forma inesperada. El Maestro de Mazmorras intentará interpretar tu acción de otra manera.';
+            isUserActionable = true;
         }
-        addDMMessage(errorMessage, []);
+
+        // Add debugging info in debug mode
+        if (DEBUG_IA_COMMUNICATION && !isUserActionable) {
+            errorMessage += ` (Detalles: ${err.message})`;
+        }
+
+        addDMMessage(errorMessage, [isUserActionable ? ['Intentarlo de nuevo', 'Cambiar acción', 'Ver ayuda'] : []]);
     } finally {
         if (playerInput) { playerInput.disabled = false; }
         if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
@@ -2095,40 +2127,186 @@ async function generateNpcPortrait(npc) {
 }
 
 function processNpcUpdate(update) {
-    if (!update || !update.name) return;
+    // Validate input
+    if (!update || typeof update !== 'object' || !update.name || typeof update.name !== 'string' || update.name.trim() === '') {
+        if (DEBUG_IA_COMMUNICATION) {
+            console.warn('Invalid NPC update received:', update);
+        }
+        return;
+    }
+
+    // Ensure NPCs array exists
     if (!state.gameState.npcs) state.gameState.npcs = [];
 
-    const existing = state.gameState.npcs.find(n => n.name.toLowerCase() === update.name.toLowerCase());
+    // Sanitize name
+    const sanitizedName = update.name.trim();
+
+    const existing = state.gameState.npcs.find(n => n.name.toLowerCase() === sanitizedName.toLowerCase());
     if (existing) {
+        // Validate and clamp relationship
         if (update.relationship !== undefined) {
-            const cap = existing.maxRelationship !== undefined ? existing.maxRelationship : 5;
-            existing.relationship = Math.min(cap, Math.max(-3, update.relationship));
-            existing.relationshipLabel = getNpcRelTier(existing.relationship).label;
+            const rel = parseInt(update.relationship);
+            if (!isNaN(rel)) {
+                const cap = existing.maxRelationship !== undefined ? existing.maxRelationship : 5;
+                const clampedRel = Math.min(cap, Math.max(-3, rel));
+                if (existing.relationship !== clampedRel) {
+                    existing.relationship = clampedRel;
+                    existing.relationshipLabel = getNpcRelTier(existing.relationship).label;
+                }
+            } else if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid relationship value for NPC:', update.relationship);
+            }
         }
-        if (update.fact && !existing.knownFacts.includes(update.fact)) existing.knownFacts.push(update.fact);
-        if (update.goodMemory && !existing.goodMemories.includes(update.goodMemory)) existing.goodMemories.push(update.goodMemory);
-        if (update.badMemory && !existing.badMemories.includes(update.badMemory)) existing.badMemories.push(update.badMemory);
-        if (update.race && !existing.race) existing.race = update.race;
-        if (update.role && !existing.role) existing.role = update.role;
-        if (update.lastSeen) existing.lastSeen = update.lastSeen || state.gameState.location;
-        if (update.portraitHint && !existing.portraitHint) { existing.portraitHint = update.portraitHint; generateNpcPortrait(existing); }
+
+        // Validate and add fact
+        if (update.fact && typeof update.fact === 'string' && update.fact.trim() !== '') {
+            const fact = update.fact.trim();
+            if (!existing.knownFacts.includes(fact)) {
+                existing.knownFacts.push(fact);
+            }
+        } else if (DEBUG_IA_COMMUNICATION && update.fact !== undefined) {
+            console.warn('Invalid fact value for NPC:', update.fact);
+        }
+
+        // Validate and add good memory
+        if (update.goodMemory && typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '') {
+            const goodMemory = update.goodMemory.trim();
+            if (!existing.goodMemories.includes(goodMemory)) {
+                existing.goodMemories.push(goodMemory);
+            }
+        } else if (DEBUG_IA_COMMUNICATION && update.goodMemory !== undefined) {
+            console.warn('Invalid goodMemory value for NPC:', update.goodMemory);
+        }
+
+        // Validate and add bad memory
+        if (update.badMemory && typeof update.badMemory === 'string' && update.badMemory.trim() !== '') {
+            const badMemory = update.badMemory.trim();
+            if (!existing.badMemories.includes(badMemory)) {
+                existing.badMemories.push(badMemory);
+            }
+        } else if (DEBUG_IA_COMMUNICATION && update.badMemory !== undefined) {
+            console.warn('Invalid bad memory value for NPC:', update.badMemory);
+        }
+
+        // Validate and set race
+        if (update.race !== undefined) {
+            if (typeof update.race === 'string') {
+                const race = update.race.trim();
+                if (race !== '' && existing.race !== race) {
+                    existing.race = race;
+                }
+            } else if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid race value for NPC:', update.race);
+            }
+        }
+
+        // Validate and set role
+        if (update.role !== undefined) {
+            if (typeof update.role === 'string') {
+                const role = update.role.trim();
+                if (role !== '' && existing.role !== role) {
+                    existing.role = role;
+                }
+            } else if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid role value for NPC:', update.role);
+            }
+        }
+
+        // Validate and set lastSeen
+        if (update.lastSeen !== undefined) {
+            if (typeof update.lastSeen === 'string') {
+                const lastSeen = update.lastSeen.trim();
+                if (lastSeen !== '' && existing.lastSeen !== lastSeen) {
+                    existing.lastSeen = lastSeen;
+                }
+            } else if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid lastSeen value for NPC:', update.lastSeen);
+            }
+        }
+
+        // Validate and set portraitHint
+        if (update.portraitHint !== undefined) {
+            if (typeof update.portraitHint === 'string') {
+                const portraitHint = update.portraitHint.trim();
+                if (portraitHint !== '' && existing.portraitHint !== portraitHint) {
+                    existing.portraitHint = portraitHint;
+                    generateNpcPortrait(existing);
+                }
+            } else if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid portraitHint value for NPC:', update.portraitHint);
+            }
+        }
+
+        // Validate and set notes
+        if (update.notes !== undefined) {
+            if (typeof update.notes === 'string') {
+                const notes = update.notes.trim();
+                if (existing.notes !== notes) {
+                    existing.notes = notes;
+                }
+            } else if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid notes value for NPC:', update.notes);
+            }
+        }
     } else {
-        const tier = NPC_REL_TIERS.find(t => t.value === (update.relationship||0)) || NPC_REL_TIERS[3];
+        // Validate relationship for new NPC
+        let relationship = 0;
+        if (update.relationship !== undefined) {
+            const rel = parseInt(update.relationship);
+            if (!isNaN(rel)) {
+                relationship = Math.min(5, Math.max(-3, rel));
+            } else if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid relationship value for new NPC:', update.relationship);
+            }
+        }
+
+        const tier = NPC_REL_TIERS.find(t => t.value === relationship) || NPC_REL_TIERS[3];
+
+        // Validate and sanitize string fields
+        const name = sanitizedName;
+        const race = (typeof update.race === 'string') ? update.race.trim() : '';
+        const role = (typeof update.role === 'string') ? update.role.trim() : '';
+        const gender = (typeof update.gender === 'string') ? update.gender.trim() : '';
+        const portraitHint = (typeof update.portraitHint === 'string') ? update.portraitHint.trim() : '';
+        const lastSeen = (typeof update.lastSeen === 'string' && update.lastSeen.trim() !== '')
+            ? update.lastSeen.trim()
+            : (state.gameState.location || '');
+        const notes = (typeof update.notes === 'string') ? update.notes.trim() : '';
+
+        // Validate array fields
+        const knownFacts = Array.isArray(update.fact)
+            ? update.fact.filter(f => typeof f === 'string' && f.trim() !== '').map(f => f.trim())
+            : (typeof update.fact === 'string' && update.fact.trim() !== '')
+                ? [update.fact.trim()]
+                : [];
+
+        const goodMemories = Array.isArray(update.goodMemory)
+            ? update.goodMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim())
+            : (typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '')
+                ? [update.goodMemory.trim()]
+                : [];
+
+        const badMemories = Array.isArray(update.badMemory)
+            ? update.badMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim())
+            : (typeof update.badMemory === 'string' && update.badMemory.trim() !== '')
+                ? [update.badMemory.trim()]
+                : [];
+
         const npc = {
-            id: update.name.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now(),
-            name: update.name,
-            race: update.race || '',
-            role: update.role || '',
-            gender: update.gender || '',
+            id: name.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now(),
+            name,
+            race,
+            role,
+            gender,
             portrait: null,
-            portraitHint: update.portraitHint || '',
-            relationship: update.relationship !== undefined ? update.relationship : 0,
-            relationshipLabel: update.relationshipLabel || tier.label,
-            knownFacts: update.fact ? [update.fact] : [],
-            goodMemories: update.goodMemory ? [update.goodMemory] : [],
-            badMemories: update.badMemory ? [update.badMemory] : [],
-            lastSeen: update.lastSeen || state.gameState.location || '',
-            notes: update.notes || ''
+            portraitHint,
+            relationship,
+            relationshipLabel: tier.label,
+            knownFacts,
+            goodMemories,
+            badMemories,
+            lastSeen,
+            notes
         };
         state.gameState.npcs.push(npc);
         generateNpcPortrait(npc);
@@ -2138,8 +2316,6 @@ function processNpcUpdate(update) {
     const panel = document.getElementById('npcModalContent');
     if (panel) renderNpcModalContent();
 }
-
-function parseLlmResponse(response) {
     let narration = response;
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
@@ -2225,7 +2401,10 @@ async function summarizeContext() {
         const d = await r.json();
         state.gameState.summary = d.choices[0].message.content.trim();
         if (state.chatHistory.length > 30) state.chatHistory = state.chatHistory.slice(-20);
-    } catch(e) { console.warn(e); }
+    } catch(e) {
+        console.warn('Error al resumir el contexto (no crítico):', e);
+        // No afecta al gameplay, solo al resumen de contexto
+    }
 }
 
 loadFirebaseSDK().then(() => init());
