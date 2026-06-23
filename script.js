@@ -1379,6 +1379,8 @@ function bindChat() {
     async function sendMessage() {
         const action = playerInput.value.trim();
         if (!action) return;
+        // Clear input immediately so user can prepare next action
+        playerInput.value = '';
         state.pendingRoll = null; // clear any stale roll
 
         // Check if action requires a roll BEFORE sending to AI
@@ -1394,7 +1396,7 @@ function bindChat() {
         }
 
         // If no roll needed, proceed normally
-        playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...'; playerInput.value = '';
+        playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...';
         addPlayerMessage(action, null, 'done', state.chatHistory.length);
         await callAndRespond(action, null);
     }
@@ -1603,7 +1605,8 @@ function createMessageEl(msg, idx) {
         wrap.className = 'message dm';
         let rollHtml = '';
         if (msg.rollResult) {
-            rollHtml = `<div class="roll-badge ${msg.rollResult.success?'success':'failure'}">${msg.rollResult.skill} · ${msg.rollResult.success?'Éxito':'Fallo'} (${msg.rollResult.total})</div>`;
+            const modDisplay = msg.rollResult.mod >= 0 ? `+${msg.rollResult.mod}` : `${msg.rollResult.mod}`;
+            rollHtml = `<div class="roll-badge ${msg.rollResult.success?'success':'failure'}">${msg.rollResult.skill} d20=${msg.rollResult.roll}${modDisplay}=${msg.rollResult.total} ${msg.rollResult.success?'Éxito':'Fallo'}</div>`;
         }
         wrap.innerHTML = `
             <div class="dm-header"><span class="dm-label">Maestro de Mazmorras</span><span class="dm-location">${msg.location||''} · ${msg.time||''}</span></div>
@@ -1618,7 +1621,8 @@ function createMessageEl(msg, idx) {
             const mod = Math.floor(((state.character?.stats[t.stat]||10)-10)/2);
             rollHtml = `<div class="roll-pending"><span class="roll-skill">${t.skill}</span><span class="roll-mod">${mod>=0?'+':''}${mod}</span><span class="roll-dc">DC ${t.dc}</span><button class="roll-btn" onclick="executeRoll(${idx})">→ Tirar</button></div>`;
         } else if (msg.roll) {
-            rollHtml = `<div class="roll-badge ${msg.roll.success?'success':'failure'}">${msg.roll.skill} · ${msg.roll.success?'Éxito':'Fallo'} (${msg.roll.total})</div>`;
+            const modDisplay = msg.roll.mod >= 0 ? `+${msg.roll.mod}` : `${msg.roll.mod}`;
+            rollHtml = `<div class="roll-badge ${msg.roll.success?'success':'failure'}">${msg.roll.skill} d20=${msg.roll.roll}${modDisplay}=${msg.roll.total} ${msg.roll.success?'Éxito':'Fallo'}</div>`;
         }
         wrap.innerHTML = `<div class="player-action">${msg.content}</div>${rollHtml}`;
     }
