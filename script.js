@@ -319,7 +319,7 @@ function guessRequiredRoll(action) {
     }
 
     // Perception actions requiring SAB
-    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir'];
+    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo'];
     if (perceptionActions.some(word => actionLower.includes(word))) {
         return { skill: 'Percepción', stat: 'SAB' };
     }
