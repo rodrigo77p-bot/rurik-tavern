@@ -1778,6 +1778,7 @@ async function callAndRespond(action, rollResult) {
         if (!rollRequest) {
             const suggestedRoll = guessRequiredRoll(action);
             // Backup detection for perception/action keywords that might be missed by guessRequiredRoll
+            const actionLower = action.toLowerCase();
             const strongPerceptionKeywords = ['escuch', 'oír', 'oyer', 'oia', 'oio', 'oido', 'oir', 'ver', 'mirar', 'detectar', 'sentir', 'percibir', 'intuir'];
             const hasStrongKeyword = strongPerceptionKeywords.some(kw => actionLower.includes(kw));
 
@@ -1922,6 +1923,7 @@ INSTRUCCIONES:
 - Si hay historia del mundo en esta zona, inclúyela naturalmente.
 - Romance, seducción y relaciones pueden desarrollarse naturalmente.
 - Si el jugador muere (hp=0), narra una muerte épica.
+- Narra las consecuencias claras de éxito o fracaso basado en el resultado de la tirada, manteniendo el tono cinematográfico y inmersivo.
 - Termina en momento de decisión o antes del bloque de tirada.
 - AVANZA LA HISTORIA: Cuando sea apropiado, cambia de ubicación y avanza la trama. Usa bloques [STATE:] para reflejar cambios en ubicación, hora del día, y otros aspectos del estado del juego. No te quedes estancado en un solo lugar sin razón narrativa.
 
