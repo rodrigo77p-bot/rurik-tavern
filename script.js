@@ -319,7 +319,7 @@ function guessRequiredRoll(action) {
     }
 
     // Perception actions requiring SAB
-    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo', 'ecuchar', 'escucho', 'escuchó', 'escuchais', 'escuchan', 'oía', 'oías', 'oímos', 'oían', 'oíste', 'oísteis', 'escuchamos', 'escuchad'];
+    const perceptionActions = ['percibir peligro', 'intuir mentiras', 'detectar', 'percibir', 'escuchar', 'oír', 'escuchando', 'oyendo', 'ecuchar', 'escucho', 'escuchó', 'escuchais', 'escuchan', 'oía', 'oías', 'oímos', 'oían', 'oíste', 'oísteis', 'escuchamos', 'escuchad', 'escuchas', 'escucha', 'oigo', 'oyes', 'oye', 'oís', 'oyen', 'oigo', 'oyes', 'oye', 'ois', 'oyen'];
     if (perceptionActions.some(word => actionLower.includes(word))) {
         return { skill: 'Percepción', stat: 'SAB' };
     }
@@ -1475,9 +1475,16 @@ async function callAndRespond(action, rollResult) {
         // Fallback: if IA didn't request a roll but we think it should have, try again with more explicit instructions
         if (!rollRequest) {
             const suggestedRoll = guessRequiredRoll(action);
-            if (suggestedRoll) {
+            // Backup detection for perception/action keywords that might be missed by guessRequiredRoll
+            const strongPerceptionKeywords = ['escuch', 'oír', 'oyer', 'oia', 'oio', 'oido', 'oir', 'ver', 'mirar', 'detectar', 'sentir', 'percibir', 'intuir'];
+            const hasStrongKeyword = strongPerceptionKeywords.some(kw => actionLower.includes(kw));
+
+            if (suggestedRoll || hasStrongKeyword) {
+                // If we have a suggested roll from guessRequiredRoll, use it
+                // Otherwise, default to Perception SAB for common perception actions
+                const rollToUse = suggestedRoll || { skill: 'Percepción', stat: 'SAB' };
                 // Create a more insistent user prompt that explicitly asks for a roll
-                const insistentAction = `${action}\n\nIMPORTANTE: Esta acción claramente requiere una tirada de dados. Por favor, incluye un bloque [ROLL:] en tu respuesta con la skill, stat, dc y razón adecuados.`;
+                const insistentAction = `${action}\n\nIMPORTANTE: Esta acción claramente requiere una tirada de dados. Por favor, incluye un bloque [ROLL:] en tu respuesta con la skill '${rollToUse.skill}', stat '${rollToUse.stat}', dc apropiado y razón.`;
                 const insistentResponse = await Promise.race([callGroqApi(insistentAction, rollResult), timeoutPromise]);
 
                 // Debug logging
