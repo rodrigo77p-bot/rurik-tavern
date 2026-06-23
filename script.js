@@ -757,6 +757,29 @@ async function init() {
     if (!fbConfig) { showScreen('firebaseSetup'); return; }
     try { initFirebase(JSON.parse(fbConfig)); } catch(e) { localStorage.removeItem('fbConfig'); showScreen('firebaseSetup'); return; }
 
+    // Inject CSS for roll badges
+    const style = document.createElement('style');
+    style.textContent = `
+        .roll-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.85rem;
+            margin: 4px 0;
+        }
+        .roll-badge.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .roll-badge.failure {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    `;
+    document.head.appendChild(style);
+
     await new Promise(resolve => {
         const unsub = fbAuth.onAuthStateChanged(user => { unsub(); fbUser = user; resolve(); });
     });
@@ -1578,9 +1601,14 @@ function createMessageEl(msg, idx) {
     wrap.setAttribute('data-idx', idx);
     if (msg.role === 'dm') {
         wrap.className = 'message dm';
+        let rollHtml = '';
+        if (msg.rollResult) {
+            rollHtml = `<div class="roll-badge ${msg.rollResult.success?'success':'failure'}">${msg.rollResult.skill} · ${msg.rollResult.success?'Éxito':'Fallo'} (${msg.rollResult.total})</div>`;
+        }
         wrap.innerHTML = `
             <div class="dm-header"><span class="dm-label">Maestro de Mazmorras</span><span class="dm-location">${msg.location||''} · ${msg.time||''}</span></div>
             <div class="dm-content">${msg.content}</div>
+            ${rollHtml}
             ${msg.actions?.length ? `<div class="action-chips">${msg.actions.map(a=>`<button class="action-chip" onclick="useAction('${a.replace(/'/g,"\\'").replace(/"/g,'\\"')}')">↗ ${a}</button>`).join('')}</div>` : ''}`;
     } else {
         wrap.className = 'message player';
