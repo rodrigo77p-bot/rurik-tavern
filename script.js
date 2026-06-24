@@ -2274,6 +2274,8 @@ function processNpcUpdate(update) {
     const panel = document.getElementById('npcModalContent');
     if (panel) renderNpcModalContent();
 }
+
+function parseLlmResponse(response) {
     let narration = response;
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
