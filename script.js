@@ -574,7 +574,128 @@ function guessRequiredRoll(action) {
     return null;
 }
 
+function getRecentHistory() {
+    // Get last 3 exchanges (player + DM pairs) or fewer if not available
+    const recentExchanges = [];
+    const chatHistory = state.chatHistory;
+
+    // Start from the end and go backwards, collecting up to 3 exchanges
+    let i = chatHistory.length - 1;
+    let exchangesCollected = 0;
+
+    while (i >= 0 && exchangesCollected < 3) {
+        // Look for a player message followed by a DM message (or vice versa)
+        if (chatHistory[i].role === 'player') {
+            // Found player message, look for preceding DM message if available
+            const playerMsg = chatHistory[i];
+            let dmMsg = null;
+
+            // Check if there's a DM message before this player message
+            if (i > 0 && chatHistory[i-1].role === 'dm') {
+                dmMsg = chatHistory[i-1];
+                recentExchanges.unshift({ dm: dmMsg, player: playerMsg });
+                i -= 2; // Skip both messages
+            } else {
+                // No preceding DM message, just add the player message
+                recentExchanges.unshift({ player: playerMsg });
+                i -= 1;
+            }
+            exchangesCollected++;
+        } else if (chatHistory[i].role === 'dm') {
+            // Found DM message, look for following player message if available
+            const dmMsg = chatHistory[i];
+            let playerMsg = null;
+
+            // Check if there's a player message after this DM message
+            if (i < chatHistory.length - 1 && chatHistory[i+1].role === 'player') {
+                playerMsg = chatHistory[i+1];
+                recentExchanges.unshift({ dm: dmMsg, player: playerMsg });
+                i += 2; // Skip both messages
+            } else {
+                // No following player message, just add the DM message
+                recentExchanges.unshift({ dm: dmMsg });
+                i += 1;
+            }
+            exchangesCollected++;
+        } else {
+            i -= 1;
+        }
+    }
+
+    // Format the recent exchanges into a string
+    if (recentExchanges.length === 0) {
+        return "Inicio de la partida.";
+    }
+
+    let historyString = "";
+    recentExchanges.forEach((exchange, index) => {
+        if (exchange.dm && exchange.player) {
+            historyString += `- Maestra: "${exchange.dm.content.substring(0, 100)}${exchange.dm.content.length > 100 ? '...' : ''}"\n`;
+            historyString += `- Jugador: "${exchange.player.content.substring(0, 100)}${exchange.player.content.length > 100 ? '...' : ''}"\n`;
+        } else if (exchange.dm) {
+            historyString += `- Maestra: "${exchange.dm.content.substring(0, 100)}${exchange.dm.content.length > 100 ? '...' : ''}"\n`;
+        } else if (exchange.player) {
+            historyString += `- Jugador: "${exchange.player.content.substring(0, 100)}${exchange.player.content.length > 100 ? '...' : ''}"\n`;
+        }
+    });
+
+    return historyString.trim();
+}
+
 function validateStateUpdates(stateUpdates) {
+    if (!stateUpdates || typeof stateUpdates !== 'object') return;
+
+    // Validate location
+    if (stateUpdates.location !== undefined) {
+        if (typeof stateUpdates.location !== 'string' || stateUpdates.location.trim() === '') {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid location in stateUpdates:', stateUpdates.location);
+            }
+        }
+    }
+
+    // Validate HP
+    if (stateUpdates.hp !== undefined) {
+        if (typeof stateUpdates.hp !== 'number' || stateUpdates.hp < 0) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid HP in stateUpdates:', stateUpdates.hp);
+            }
+        }
+        // Note: We don't validate against maxHp here because maxHp might be updated in the same batch
+    }
+
+    // Validate timeOfDay
+    if (stateUpdates.timeOfDay !== undefined) {
+        if (typeof stateUpdates.timeOfDay !== 'string' || stateUpdates.timeOfDay.trim() === '') {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid timeOfDay in stateUpdates:', stateUpdates.timeOfDay);
+            }
+        }
+    }
+
+    // Validate inventory
+    if (stateUpdates.inventory !== undefined) {
+        if (!Array.isArray(stateUpdates.inventory)) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid inventory in stateUpdates: not an array', stateUpdates.inventory);
+            }
+        }
+    }
+
+    // Validate that we're not setting both hp and maxHp to invalid combinations
+    if (stateUpdates.hp !== undefined && stateUpdates.maxHp !== undefined) {
+        if (stateUpdates.hp < 0 || stateUpdates.maxHp < 0) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Negative HP or maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
+            }
+        }
+        if (stateUpdates.hp > stateUpdates.maxHp) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('HP exceeds maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
+            }
+        }
+    }
+}
     if (!stateUpdates || typeof stateUpdates !== 'object') return;
 
     // Validate location
@@ -1967,6 +2088,9 @@ PERSONAJE:
 - ${char.name}, ${char.race}, ${classLabel}, ${char.gender||''}${char.gender ? ',' : ''} trasfondo: ${char.background}${char.motivation?', motivación: '+char.motivation:''}
 - FUE ${stats.FUE}(${fmod('FUE')}), DES ${stats.DES}(${fmod('DES')}), CON ${stats.CON}(${fmod('CON')}), INT ${stats.INT}(${fmod('INT')}), SAB ${stats.SAB}(${fmod('SAB')}), CAR ${stats.CAR}(${fmod('CAR')})
 ${curseNote}
+
+HISTORIAL RECIENTE:
+${getRecentHistory()}
 
 ESTADO:
 - Ubicación: ${state.gameState.location} | Hora: ${state.gameState.timeOfDay}
