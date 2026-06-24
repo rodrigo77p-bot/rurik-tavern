@@ -2035,7 +2035,7 @@ Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo 
 
     let userContent = playerAction;
     if (isGameAction) {
-        userContent = `[ACTION SELECCIONADA] ${playerAction}`;
+        userContent = `[ACTION SELECCIONADA] ${playerAction}\n\n(CLARIFICACIÓN: La acción anterior fue seleccionada por el jugador. Describa las consecuencias de que el jugador realice esta acción, sin atribuirla al Maestro de Mazmorras.)`;
     }
 
     return { system, user: userContent };
