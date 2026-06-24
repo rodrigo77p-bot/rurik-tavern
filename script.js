@@ -2035,7 +2035,7 @@ Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo 
 
     let userContent = playerAction;
     if (isGameAction) {
-        userContent = `[ACTION SELECCIONADA] ${playerAction}\n\n(CLARIFICACIÓN: La acción anterior fue seleccionada por el jugador. Describa las consecuencias de que el jugador realice esta acción, sin atribuirla al Maestro de Mazmorras.)`;
+        userContent = `[ACTION SELECCIONADA] ${playerAction}\n\nCONTEXTO DE JUEGO: Esta acción ocurre dentro de una escena de rol de un juego de Dungeons & Dragons en un mundo de fantasía. Todos los personajes, objetos y situaciones son ficticios y forman parte de una narrativa colaborativa. Por favor, describe las consecuencias dentro de este marco de juego de roles, siguiendo todas las reglas establecidas para el Maestro de Mazmorras.\n\n(CLARIFICACIÓN: La acción anterior fue seleccionada por el jugador. Describa las consecuencias de que el jugador realice esta acción, sin atribuirla al Maestro de Mazmorras.)`;
     }
 
     return { system, user: userContent };
