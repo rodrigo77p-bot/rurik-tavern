@@ -307,7 +307,258 @@ const ACTION_RULES = [
 
       return { skill: skill, stat: 'CAR', dc, reason };
     }
-    // Refactored guessRequiredRoll function using data-driven approach
+  },
+  {
+    name: 'combat',
+    keywords: ['atacar', 'pelear', 'golpear', 'disparar', 'lanzar arma', 'herir', 'herida'],
+    determine: (actionLower) => {
+      let skill = 'Ataque';
+      let stat = 'FUE';
+
+      if (actionLower.includes('disparar') || actionLower.includes('arma a distancia') ||
+          actionLower.includes('arco') || actionLower.includes('ballesta')) {
+        stat = 'DES';
+      }
+
+      // Determine DC based on opponent's defense/armor
+      let dc = 12; // Default moderate
+      let reason = "Ataque estándar";
+
+      if (actionLower.includes('defensa débil') || actionLower.includes('desarmado') ||
+          actionLower.includes('vulnerable')) {
+        dc = 8;
+        reason = "Ataque a objetivo vulnerable";
+      }
+      else if (actionLower.includes('armadura pesada') || actionLower.includes('defensa alta') ||
+               actionLower.includes('protegido') || actionLower.includes('escudo')) {
+        dc = 15;
+        reason = "Ataque contra defensa alta";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'stealth',
+    keywords: ['esconder', 'sigilo', 'moverse sin ser visto', 'robar', 'hurto', 'sigiloso', 'invisible'],
+    determine: (actionLower) => {
+      let skill = 'Sigilo';
+      let stat = 'DES';
+
+      // Determine DC based on environment vigilance
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de sigilo";
+
+      if (actionLower.includes('multitud') || actionLower.includes('lugar transitado') ||
+          actionLower.includes('vigilado') || actionLower.includes('guardia')) {
+        dc = 15;
+        reason = "Sigilo en área vigilada";
+      }
+      else if (actionLower.includes('solo') || actionLower.includes('desierto') ||
+               actionLower.includes('oscuro') || actionLower.includes('sin testigos')) {
+        dc = 8;
+        reason = "Sigilo en área desierta";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'magic',
+    keywords: ['magia', 'hechizo', 'conjuro', 'arcano', 'hechizar', 'invocar'],
+    determine: (actionLower) => {
+      let skill = 'Magia';
+      let stat = 'INT';
+
+      // Determine DC based on spell complexity/power
+      let dc = 12; // Default moderate
+      let reason = "Conjuro estándar";
+
+      if (actionLower.includes('simple') || actionLower.includes('menor') ||
+          actionLower.includes('truco')) {
+        dc = 8;
+        reason = "Conjuro menor";
+      }
+      else if (actionLower.includes('poderoso') || actionLower.includes('mayor') ||
+               actionLower.includes('épico') || actionLower.includes('legendario')) {
+        dc = 15;
+        reason = "Conjuro poderoso";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'investigation',
+    keywords: ['investigar', 'examinar', 'buscar', 'inspeccionar', 'analizar', 'estudiar', 'rastrear'],
+    determine: (actionLower) => {
+      let skill = 'Investigación';
+      let stat = 'INT';
+
+      // Determine DC based on clue obscurity
+      let dc = 12; // Default moderate
+      let reason = "Investigación estándar";
+
+      if (actionLower.includes('evidente') || actionLower.includes('obvio') ||
+          actionLower.includes('claro')) {
+        dc = 8;
+        reason = "Investigación de evidencia evidente";
+      }
+      else if (actionLower.includes('oculto') || actionLower.includes('secreto') ||
+               actionLower.includes('difícil de encontrar') || actionLower.includes('pista tenue')) {
+        dc = 15;
+        reason = "Investigación de evidencia oculta";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'perception',
+    keywords: ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui', 'observar', 'notar', 'percibir'],
+    determine: (actionLower) => {
+      // Use root-based detection for perception (more flexible)
+      const perceptionRoots = ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui'];
+      const hasPerceptionRoot = perceptionRoots.some(root => actionLower.includes(root));
+
+      if (!hasPerceptionRoot) {
+        return null; // Not a perception action
+      }
+
+      let skill = 'Percepción';
+      let stat = 'SAB';
+
+      // Determine DC based on subtlety of what's being perceived
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de percepción";
+
+      if (actionLower.includes('fuerte') || actionLower.includes('evidente') ||
+          actionLower.includes('notorio') || actionLower.includes('obvio')) {
+        dc = 8;
+        reason = "Percepción de estímulo evidente";
+      }
+      else if (actionLower.includes('sutil') || actionLower.includes('oculto') ||
+               actionLower.includes('susurro') || actionLower.includes('lejos') ||
+               actionLower.includes('débil') || actionLower.includes('tenue')) {
+        dc = 15;
+        reason = "Percepción de estímulo sutil";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'athletic',
+    keywords: ['saltar', 'trepar', 'correr', 'nadar', 'equilibrio', 'atlético', 'fuerza bruta'],
+    determine: (actionLower) => {
+      let skill = 'Atletismo';
+      // Could be FUE or DES depending on the action
+      let stat = 'FUE'; // Default to strength
+
+      if (actionLower.includes('equilibrio') || actionLower.includes('acrobacia') ||
+          actionLower.includes('flexibilidad') || actionLower.includes('agilidad')) {
+        stat = 'DES';
+      }
+
+      // Determine DC based on obstacle difficulty
+      let dc = 12; // Default moderate
+      let reason = "Chequeo atlético";
+
+      if (actionLower.includes('fácil') || actionLower.includes('sencillo') ||
+          actionLower.includes('bajo')) {
+        dc = 8;
+        reason = "Actividad atlética sencilla";
+      }
+      else if (actionLower.includes('difícil') || actionLower.includes('complicado') ||
+               actionLower.includes('alto') || actionLower.includes('pesado') ||
+               actionLower.includes('extremo')) {
+        dc = 15;
+        reason = "Actividad atlética difícil";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'resistance',
+    keywords: ['resistir', 'aguantar', 'soportar', 'tolerar', 'veneno', 'enfermedad', 'dolor', 'miedo'],
+    determine: (actionLower) => {
+      let skill = 'Constitución';
+      let stat = 'CON';
+
+      // Determine DC based on effect intensity
+      let dc = 12; // Default moderate
+      let reason = "Tirada de resistencia";
+
+      if (actionLower.includes('leve') || actionLower.includes('suave') ||
+          actionLower.includes('mínimo')) {
+        dc = 8;
+        reason = "Resistencia a efecto leve";
+      }
+      else if (actionLower.includes('intenso') || actionLower.includes('fuerte') ||
+               actionLower.includes('grave') || actionLower.includes('letal') ||
+               actionLower.includes('mortal')) {
+        dc = 15;
+        reason = "Resistencia a efecto intenso";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'knowledge',
+    keywords: ['recordar', 'saber', 'conocer', 'lore', 'historia', 'identificar', 'descifrar', 'tradición'],
+    determine: (actionLower) => {
+      let skill = 'Historia';
+      let stat = 'INT';
+
+      // Determine DC based on obscurity of knowledge
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de conocimiento";
+
+      if (actionLower.includes('común') || actionLower.includes('básico') ||
+          actionLower.includes('known') || actionLower.includes('evidente')) {
+        dc = 8;
+        reason = "Conocimiento común";
+      }
+      else if (actionLower.includes('arcano') || actionLower.includes('antiguo') ||
+               actionLower.includes('olvidado') || actionLower.includes('secreto') ||
+               actionLower.includes('misterioso') || actionLower.includes('legendario')) {
+        dc = 15;
+        reason = "Conocimiento arcano o antiguo";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'healing',
+    keywords: ['curar', 'sanar', 'medicina', 'tratamiento', 'cuidar', 'aliviar', 'herida'],
+    determine: (actionLower) => {
+      let skill = 'Medicina';
+      let stat = 'SAB';
+
+      // Determine DC based on injury severity
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de medicina";
+
+      if (actionLower.includes('herida leve') || actionLower.includes('rasguño') ||
+          actionLower.includes('moretón')) {
+        dc = 8;
+        reason = "Curación de herida leve";
+      }
+      else if (actionLower.includes('herida grave') || actionLower.includes('sangrado') ||
+               actionLower.includes('herida profunda') || actionLower.includes('fractura')) {
+        dc = 15;
+        reason = "Curación de herida grave";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  }
+];
+
+// Refactored guessRequiredRoll function using data-driven approach
 function guessRequiredRoll(action) {
     const actionLower = action.toLowerCase();
 
