@@ -257,10 +257,13 @@ function guessStatFromSkill(skill) {
         'Magia':'INT','Arcanos':'INT','Historia':'INT','Investigación':'INT','Conocimiento':'INT',
         'Percepción':'SAB','Medicina':'SAB','Naturaleza':'SAB','Supervivencia':'SAB','Intuición':'SAB',
         'Constitución':'CON','Resistencia':'CON'
+    };
+    return map[skill] || 'DES';
+}
+
 // Helper function to convert item string to Item object (for backward compatibility)
 function createItemFromName(itemName) {
     if (typeof itemName !== 'string') {
-        // If it's already an object, return as is (with validation if needed)
         return itemName;
     }
 
@@ -269,92 +272,35 @@ function createItemFromName(itemName) {
         return { name: 'Item desconocido', type: 'objeto', damage: null, rarity: 'común', description: '', equipped: false };
     }
 
-    // Determine item type based on name
     const lowerName = name.toLowerCase();
-    let type = 'objeto'; // default
-    let damage = null;   // default for non-weapons
+    let type = 'objeto';
+    let damage = null;
 
-    // Weapon keywords
-    if (lowerName.includes('espada') ||
-        lowerName.includes('daga') ||
-        lowerName.includes('arco') ||
-        lowerName.includes('hacha') ||
-        lowerName.includes('maz') ||  // maza, mazacote
-        lowerName.includes('lanza') ||
-        lowerName.includes('bastón') ||
-        lowerName.includes('club') ||
-        lowerName.includes('martillo')) {
+    if (lowerName.includes('espada') || lowerName.includes('daga') || lowerName.includes('arco') ||
+        lowerName.includes('hacha') || lowerName.includes('maz') || lowerName.includes('lanza') ||
+        lowerName.includes('bastón') || lowerName.includes('club') || lowerName.includes('martillo')) {
         type = 'arma';
-        // Default damage for weapons - can be refined per weapon type
         damage = 6;
-    }
-    // Armor/shield keywords
-    else if (lowerName.includes('armadura') ||
-             lowerName.includes('escudo') ||
-             lowerName.includes('ropa') ||
-             lowerName.includes('vestiduras') ||
-             lowerName.includes('túnica') ||
-             lowerName.includes('capa') ||
-             lowerName.includes('yelmo') ||
-             lowerName.includes('yelmo') ||
-             lowerName.includes('guantes') ||
-             lowerName.includes('botas')) {
+    } else if (lowerName.includes('armadura') || lowerName.includes('escudo') || lowerName.includes('ropa') ||
+               lowerName.includes('vestiduras') || lowerName.includes('túnica') || lowerName.includes('capa') ||
+               lowerName.includes('yelmo') || lowerName.includes('guantes') || lowerName.includes('botas')) {
         type = 'armadura';
-        // Armor doesn't have damage in D&D 5e terms, but could have AC bonus
-        damage = null;
-    }
-    // Potion/consumable keywords
-    else if (lowerName.includes('poción') ||
-             lowerName.includes('veneno') ||
-             lowerName.includes('curativa') ||
-             lowerName.includes('antídoto') ||
-             lowerName.includes('aceite') ||
-             lowerName.includes('pergamino')) {
+    } else if (lowerName.includes('poción') || lowerName.includes('veneno') || lowerName.includes('curativa') ||
+               lowerName.includes('antídoto') || lowerName.includes('aceite') || lowerName.includes('pergamino')) {
         type = 'consumible';
-        damage = null;
-    }
-    // Treasure/junk keywords
-    else if (lowerName.includes('moneda') ||
-             lowerName.includes('gem') ||
-             lowerName.includes('joya') ||
-             lowerName.includes('arte') ||
-             lowerName.includes('tesoro')) {
+    } else if (lowerName.includes('moneda') || lowerName.includes('gem') || lowerName.includes('joya') ||
+               lowerName.includes('arte') || lowerName.includes('tesoro')) {
         type = 'tesoro';
-        damage = null;
-    }
-    // Component/tool keywords
-    else if (lowerName.includes('componente') ||
-             lowerName.includes('herramienta') ||
-             lowerName.includes('kit') ||
-             lowerName.includes('libro') ||
-             lowerName.includes('varita') ||
-             lowerName.includes('orbe') ||
-             lowerName.includes('amuleto') ||
-             lowerName.includes('símbolo')) {
+    } else if (lowerName.includes('componente') || lowerName.includes('herramienta') || lowerName.includes('kit') ||
+               lowerName.includes('libro') || lowerName.includes('varita') || lowerName.includes('orbe') ||
+               lowerName.includes('amuleto') || lowerName.includes('símbolo')) {
         type = 'componente';
-        damage = null;
-    }
-    // Food/rations
-    else if (lowerName.includes('ración') ||
-             lowerName.includes('pan') ||
-             lowerName.includes('agua') ||
-             lowerName.includes('vino') ||
-             lowerName.includes('comida') ||
-             lowerName.includes('hidromiel')) {
+    } else if (lowerName.includes('ración') || lowerName.includes('pan') || lowerName.includes('agua') ||
+               lowerName.includes('vino') || lowerName.includes('comida') || lowerName.includes('hidromiel')) {
         type = 'ración';
-        damage = null;
     }
-    // Default is already 'objeto'
 
-    return {
-        name: name,
-        type: type,
-        damage: damage,
-        rarity: 'común', // Default rarity
-        description: '', // No description by default
-        equipped: false  // Not equipped by default
-};
-    return map[skill] || 'DES';
+    return { name, type, damage, rarity: 'común', description: '', equipped: false };
 }
 
 function guessSkillCategory(skill) {
@@ -739,59 +685,6 @@ function getRecentHistory() {
 }
 
 function validateStateUpdates(stateUpdates) {
-    if (!stateUpdates || typeof stateUpdates !== 'object') return;
-
-    // Validate location
-    if (stateUpdates.location !== undefined) {
-        if (typeof stateUpdates.location !== 'string' || stateUpdates.location.trim() === '') {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid location in stateUpdates:', stateUpdates.location);
-            }
-        }
-    }
-
-    // Validate HP
-    if (stateUpdates.hp !== undefined) {
-        if (typeof stateUpdates.hp !== 'number' || stateUpdates.hp < 0) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid HP in stateUpdates:', stateUpdates.hp);
-            }
-        }
-        // Note: We don't validate against maxHp here because maxHp might be updated in the same batch
-    }
-
-    // Validate timeOfDay
-    if (stateUpdates.timeOfDay !== undefined) {
-        if (typeof stateUpdates.timeOfDay !== 'string' || stateUpdates.timeOfDay.trim() === '') {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid timeOfDay in stateUpdates:', stateUpdates.timeOfDay);
-            }
-        }
-    }
-
-    // Validate inventory
-    if (stateUpdates.inventory !== undefined) {
-        if (!Array.isArray(stateUpdates.inventory)) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid inventory in stateUpdates: not an array', stateUpdates.inventory);
-            }
-        }
-    }
-
-    // Validate that we're not setting both hp and maxHp to invalid combinations
-    if (stateUpdates.hp !== undefined && stateUpdates.maxHp !== undefined) {
-        if (stateUpdates.hp < 0 || stateUpdates.maxHp < 0) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Negative HP or maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
-            }
-        }
-        if (stateUpdates.hp > stateUpdates.maxHp) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('HP exceeds maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
-            }
-        }
-    }
-}
     if (!stateUpdates || typeof stateUpdates !== 'object') return;
 
     // Validate location
@@ -2762,4 +2655,3 @@ async function summarizeContext() {
 }
 
 loadFirebaseSDK().then(() => init()).catch(() => init());
-}
