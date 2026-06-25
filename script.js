@@ -137,6 +137,143 @@ const ADVENTURES = [
 ];
 
 const CLASS_ICONS = { 'Guerrero':'⚔️','Mago':'🔮','Pícaro':'🗡️','Clérigo':'✦','Bardo':'🎭','Druida':'🌿','Explorador':'🏹','Paladín':'🛡️','Hechicero':'⚡','Monje':'👊' };
+
+const CLASS_ABILITIES = {
+    'Guerrero':   { can: ['combate cuerpo a cuerpo','uso de armas y armaduras','tácticas militares','resistencia física','intimidación por fuerza'], cannot: ['magia arcana','hechizos','necromancia','invocar o animar muertos','curación mágica','rituales arcanos o divinos','conjuros de cualquier tipo'] },
+    'Mago':       { can: ['magia arcana','hechizos y conjuros','rituales arcanos','identificar objetos mágicos','leer pergaminos mágicos'], cannot: ['magia divina','curación sagrada','transformación animal','ki ni artes marciales','armaduras pesadas'] },
+    'Pícaro':     { can: ['sigilo','robo y pickpocketing','venenos','trampas','engaño','acrobacias','ataques furtivos'], cannot: ['magia arcana','hechizos','necromancia','curación mágica','combate frontal con armadura pesada'] },
+    'Clérigo':    { can: ['magia divina','curación mágica','rituales sagrados','expulsar muertos vivientes','bendiciones'], cannot: ['magia arcana','necromancia oscura','conjuros arcanos','venenos'] },
+    'Bardo':      { can: ['magia arcana menor','música mágica','encantamientos','ilusiones menores','persuasión sobrenatural','conocimiento amplio'], cannot: ['necromancia','hechizos destructivos de alto nivel','armaduras pesadas','combate físico avanzado'] },
+    'Druida':     { can: ['magia natural','transformación en animales','curación natural','rituales de naturaleza','control del clima menor'], cannot: ['magia arcana','necromancia','armaduras de metal','conjuros de fuego o destrucción masiva'] },
+    'Explorador': { can: ['rastreo','arco y armas a distancia','supervivencia en naturaleza','magia menor de naturaleza','emboscadas'], cannot: ['magia arcana avanzada','necromancia','curación mágica','armaduras pesadas'] },
+    'Paladín':    { can: ['combate sagrado','curación divina menor','auras de protección','detectar el mal','smite divino'], cannot: ['magia arcana','necromancia','magia oscura o corrupta','venenos'] },
+    'Hechicero':  { can: ['magia arcana innata','hechizos de sangre','metamagia','conjuros instintivos'], cannot: ['magia divina','rituales arcanos complejos','curación sagrada','combate físico pesado'] },
+    'Monje':      { can: ['ki y artes marciales','velocidad sobrehumana','golpes desarmados letales','resistencia mental','deflexión de proyectiles'], cannot: ['magia arcana','necromancia','hechizos','armaduras'] }
+};
+// ===================== CHARACTER KNOWLEDGE SYSTEM =====================
+// Each entry: { id, name, type, level (1=básico,2=intermedio,3=avanzado), description }
+// learnedAbilities: { id, name, category, stat, dcBonus, description }
+const CLASS_STARTING_KNOWLEDGE = {
+    'Guerrero': {
+        knowledges: [
+            { id:'weapon_mastery',    name:'Maestría con Armas',       type:'skill',  level:2, description:'Manejo experto de espadas, hachas y lanzas.' },
+            { id:'armor_use',         name:'Uso de Armaduras',          type:'skill',  level:2, description:'Combate con armadura sin penalización.' },
+            { id:'military_tactics',  name:'Tácticas Militares',        type:'skill',  level:1, description:'Formaciones, emboscadas y estrategia básica.' },
+        ],
+        learnedAbilities: [
+            { id:'power_attack',  name:'Ataque Poderoso',  category:'combat', stat:'FUE', dcBonus:0,  description:'Golpe lento pero devastador.' },
+            { id:'second_wind',   name:'Segundo Aliento',  category:'combat', stat:'CON', dcBonus:0,  description:'Recuperar HP en combate una vez por encuentro.' },
+        ]
+    },
+    'Mago': {
+        knowledges: [
+            { id:'arcane_theory',   name:'Teoría Arcana',        type:'magic',    level:2, description:'Fundamentos de la magia arcana y sus escuelas.' },
+            { id:'spellbook_read',  name:'Lectura de Grimorios', type:'skill',    level:2, description:'Leer, copiar y descifrar hechizos escritos.' },
+            { id:'arcane_lore',     name:'Lore Arcano',          type:'lore',     level:1, description:'Historia de la magia y seres sobrenaturales.' },
+        ],
+        learnedAbilities: [
+            { id:'magic_missile',  name:'Dardo de Magia',    category:'spell', stat:'INT', dcBonus:0,  description:'Proyectil de energía arcana infalible.' },
+            { id:'detect_magic',   name:'Detectar Magia',    category:'spell', stat:'INT', dcBonus:0,  description:'Percibir auras mágicas cercanas.' },
+            { id:'arcane_shield',  name:'Escudo Arcano',     category:'spell', stat:'INT', dcBonus:2,  description:'Barrera mágica instantánea.' },
+        ]
+    },
+    'Pícaro': {
+        knowledges: [
+            { id:'stealth_arts',    name:'Arte del Sigilo',       type:'skill',  level:2, description:'Moverse sin ser visto ni oído.' },
+            { id:'lockpicking',     name:'Ganzuería',             type:'skill',  level:2, description:'Abrir cerraduras y desactivar trampas.' },
+            { id:'street_lore',     name:'Conocimiento Callejero',type:'lore',   level:1, description:'Contactos, rutas de escape y mercado negro.' },
+            { id:'poison_basics',   name:'Venenos Básicos',       type:'craft',  level:1, description:'Identificar y aplicar venenos simples.' },
+        ],
+        learnedAbilities: [
+            { id:'sneak_attack',    name:'Ataque Furtivo',    category:'combat', stat:'DES', dcBonus:0,  description:'Daño extra al atacar desde las sombras.' },
+            { id:'pickpocket',      name:'Carterismo',        category:'skill',  stat:'DES', dcBonus:0,  description:'Robar objetos sin ser detectado.' },
+        ]
+    },
+    'Clérigo': {
+        knowledges: [
+            { id:'divine_lore',     name:'Lore Divino',           type:'lore',   level:2, description:'Historia sagrada, deidades y rituales.' },
+            { id:'healing_arts',    name:'Arte de la Curación',   type:'magic',  level:2, description:'Medicina mágica y mundana.' },
+            { id:'undead_lore',     name:'Lore de No-Muertos',    type:'lore',   level:1, description:'Naturaleza, debilidades y creación de no-muertos.' },
+        ],
+        learnedAbilities: [
+            { id:'heal',            name:'Curar Heridas',     category:'spell', stat:'SAB', dcBonus:0,  description:'Sanar HP con poder divino.' },
+            { id:'turn_undead',     name:'Expulsar No-Muertos',category:'spell',stat:'SAB', dcBonus:0,  description:'Repeler o destruir muertos vivientes.' },
+            { id:'bless',           name:'Bendición',         category:'spell', stat:'SAB', dcBonus:0,  description:'Bonificación divina a aliados.' },
+        ]
+    },
+    'Bardo': {
+        knowledges: [
+            { id:'arcane_basics',   name:'Magia Arcana Básica',   type:'magic',  level:1, description:'Hechizos menores y encantamientos.' },
+            { id:'world_lore',      name:'Conocimiento del Mundo',type:'lore',   level:2, description:'Historia, política, rumores y secretos.' },
+            { id:'performance',     name:'Artes Escénicas',       type:'skill',  level:2, description:'Música, teatro y oratoria.' },
+        ],
+        learnedAbilities: [
+            { id:'bardic_inspiration', name:'Inspiración Bárdica', category:'social', stat:'CAR', dcBonus:0, description:'Dar ventaja a un aliado con música o palabras.' },
+            { id:'charm_person',    name:'Encantar Persona',   category:'spell', stat:'CAR', dcBonus:0,  description:'Hacer a alguien temporalmente amigable.' },
+            { id:'vicious_mockery', name:'Insulto Procaz',     category:'spell', stat:'CAR', dcBonus:0,  description:'Magia psíquica a través del insulto.' },
+        ]
+    },
+    'Druida': {
+        knowledges: [
+            { id:'nature_magic',    name:'Magia Natural',         type:'magic',  level:2, description:'Hechizos de tierra, viento, agua y animales.' },
+            { id:'herbalism',       name:'Herboristería',         type:'craft',  level:2, description:'Pociones, venenos y remedios naturales.' },
+            { id:'beast_lore',      name:'Lore Animal',           type:'lore',   level:2, description:'Comportamiento, rastros y lenguaje animal.' },
+        ],
+        learnedAbilities: [
+            { id:'wild_shape',      name:'Forma Salvaje',     category:'spell', stat:'SAB', dcBonus:0,  description:'Transformarse en un animal conocido.' },
+            { id:'entangle',        name:'Enredar',           category:'spell', stat:'SAB', dcBonus:0,  description:'Raíces y plantas inmovilizan enemigos.' },
+            { id:'speak_animals',   name:'Hablar con Animales',category:'spell',stat:'SAB', dcBonus:0,  description:'Comunicación básica con bestias.' },
+        ]
+    },
+    'Explorador': {
+        knowledges: [
+            { id:'tracking',        name:'Rastreo',               type:'skill',  level:2, description:'Seguir rastros en cualquier terreno.' },
+            { id:'survival',        name:'Supervivencia',         type:'skill',  level:2, description:'Orientación, caza y refugio.' },
+            { id:'nature_basics',   name:'Magia Natural Básica',  type:'magic',  level:1, description:'Hechizos menores de naturaleza.' },
+            { id:'archery',         name:'Arquería',              type:'skill',  level:2, description:'Arco y armas a distancia.' },
+        ],
+        learnedAbilities: [
+            { id:'hunters_mark',    name:'Marca del Cazador', category:'spell', stat:'SAB', dcBonus:0,  description:'Marcar a una presa para rastrearla y hacerle más daño.' },
+            { id:'colossus_slayer', name:'Matar Colosos',     category:'combat',stat:'DES', dcBonus:0,  description:'Daño extra contra enemigos heridos.' },
+        ]
+    },
+    'Paladín': {
+        knowledges: [
+            { id:'divine_magic',    name:'Magia Divina',          type:'magic',  level:1, description:'Bendiciones, smites y auras sagradas.' },
+            { id:'combat_mastery',  name:'Maestría en Combate',   type:'skill',  level:2, description:'Combate con armadura pesada y armas sagradas.' },
+            { id:'religious_lore',  name:'Lore Religioso',        type:'lore',   level:2, description:'Órdenes, dioses, rituales y enemigos sagrados.' },
+        ],
+        learnedAbilities: [
+            { id:'divine_smite',    name:'Smite Divino',      category:'combat', stat:'FUE', dcBonus:0, description:'Canalizar energía divina en un golpe.' },
+            { id:'lay_on_hands',    name:'Imponer Manos',     category:'spell',  stat:'SAB', dcBonus:0, description:'Curación divina por contacto.' },
+            { id:'aura_protection', name:'Aura de Protección',category:'spell',  stat:'CAR', dcBonus:0, description:'Bonificación a tiradas de salvación cercanas.' },
+        ]
+    },
+    'Hechicero': {
+        knowledges: [
+            { id:'innate_magic',    name:'Magia Innata',          type:'magic',  level:2, description:'Control instintivo del poder arcano interior.' },
+            { id:'metamagic',       name:'Metamagia',             type:'magic',  level:1, description:'Modificar hechizos en tiempo real.' },
+        ],
+        learnedAbilities: [
+            { id:'chaos_bolt',      name:'Rayo del Caos',     category:'spell', stat:'INT', dcBonus:0,  description:'Proyectil arcano de energía aleatoria.' },
+            { id:'wild_magic',      name:'Magia Salvaje',     category:'spell', stat:'INT', dcBonus:0,  description:'Efectos mágicos impredecibles pero potentes.' },
+            { id:'subtle_spell',    name:'Hechizo Sutil',     category:'spell', stat:'INT', dcBonus:0,  description:'Lanzar hechizos sin gestos ni palabras visibles.' },
+        ]
+    },
+    'Monje': {
+        knowledges: [
+            { id:'ki_arts',         name:'Artes del Ki',          type:'skill',  level:2, description:'Control del flujo de energía interior.' },
+            { id:'martial_arts',    name:'Artes Marciales',       type:'skill',  level:2, description:'Combate desarmado y con armas de monje.' },
+            { id:'meditation',      name:'Meditación Avanzada',   type:'skill',  level:1, description:'Resistencia mental, concentración y percepción ampliada.' },
+        ],
+        learnedAbilities: [
+            { id:'flurry_blows',    name:'Torbellino de Golpes', category:'combat', stat:'DES', dcBonus:0, description:'Dos golpes extra al usar ki.' },
+            { id:'stunning_strike', name:'Golpe Aturdidor',      category:'combat', stat:'FUE', dcBonus:0, description:'Aturdir a un enemigo gastando ki.' },
+            { id:'deflect_missiles',name:'Deflectar Proyectiles',category:'combat', stat:'DES', dcBonus:0, description:'Reducir o devolver proyectiles.' },
+        ]
+    }
+};
+
 const STATUS_LABELS = { alive:'Vivo', dead:'Muerto', cursed:'Maldito' };
 
 // ===================== PORTRAIT GENERATION =====================
@@ -235,6 +372,7 @@ const state = {
         location:'Taberna de Rurik', timeOfDay:'Tarde',
         hp:0, maxHp:0, inventory:[], quest:'', summary:'',
         companions:[], relationships:{}, npcs:[],
+        knowledges:[], learnedAbilities:[],
         skillUses:{ combat:0, magic:0, stealth:0, social:0, nature:0 },
         classEvolution:'', curse:''
     },
@@ -941,6 +1079,15 @@ function loadCharacter(charId) {
     if (!state.character.hasOwnProperty('experience')) state.character.experience = 0;
     if (!state.character.hasOwnProperty('level')) state.character.level = 1;
     if (!state.character.hasOwnProperty('skillPoints')) state.character.skillPoints = 0;
+    // Migrate: ensure knowledges and learnedAbilities exist in gameState
+    if (!Array.isArray(state.gameState.knowledges)) {
+        const starting = CLASS_STARTING_KNOWLEDGE[state.character.classe] || { knowledges:[], learnedAbilities:[] };
+        state.gameState.knowledges = starting.knowledges.map(k=>({...k}));
+    }
+    if (!Array.isArray(state.gameState.learnedAbilities)) {
+        const starting = CLASS_STARTING_KNOWLEDGE[state.character.classe] || { knowledges:[], learnedAbilities:[] };
+        state.gameState.learnedAbilities = starting.learnedAbilities.map(a=>({...a}));
+    }
     state.chatHistory = getChatHistory(charId);
     state.adventure = getAdventure(charId);
     state.turnCount = 0;
@@ -1091,6 +1238,7 @@ function renderChatScreen() {
             <button class="modal-btn" id="newAdventureBtn">🗺️ Nueva Aventura (mismo personaje)</button>
             <button class="modal-btn" id="switchCharBtn">🔄 Cambiar Personaje</button>
             <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
+            <button class="modal-btn" id="knowledgeMenuBtn">📖 Conocimientos y Habilidades</button>
             <button class="modal-btn" id="viewLegacyBtn">📜 Ver Legado del Mundo</button>
             <button class="modal-btn" id="logoutBtn">🚪 Cerrar Sesión</button>
             <button class="modal-btn danger" id="closeMenuBtn">✕ Cerrar</button>
@@ -1100,6 +1248,13 @@ function renderChatScreen() {
             <div id="inventoryList" class="inv-list"></div>
             <button class="modal-btn" id="closeInvBtn" style="margin-top:0.5rem">✓ Cerrar</button>
         </div></div>
+        <div id="knowledgeModal" class="modal hidden">
+            <div class="modal-box" style="max-width:520px;max-height:80vh;overflow-y:auto">
+                <div class="modal-title">📖 Conocimientos y Habilidades</div>
+                <div id="knowledgeModalContent"></div>
+                <button class="modal-btn" id="closeKnowledgeBtn" style="margin-top:0.75rem">✓ Cerrar</button>
+            </div>
+        </div>
         <div id="legacyModal" class="modal hidden"><div class="modal-box" style="max-width:480px">
             <div class="modal-title">📜 Legado del Mundo</div>
             <div id="legacyList" class="legacy-modal-list"></div>
@@ -1422,7 +1577,8 @@ function bindCharacterCreation() {
         state.activeCharId = id;
         setActiveCharId(id);
         state.character = char;
-        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'' };
+        const startingKnowledge = CLASS_STARTING_KNOWLEDGE[char.classe] || { knowledges:[], learnedAbilities:[] };
+        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], knowledges: startingKnowledge.knowledges.map(k=>({...k})), learnedAbilities: startingKnowledge.learnedAbilities.map(a=>({...a})), skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'' };
         Object.assign(state.gameState, gs);
         state.chatHistory = [];
         state.adventure = null;
@@ -1662,6 +1818,12 @@ function bindChat() {
     document.getElementById('manageInventoryBtn').addEventListener('click', () => {
         document.getElementById('menuModal').classList.add('hidden'); openInventoryModal();
     });
+    document.getElementById('knowledgeMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden'); openKnowledgeModal();
+    });
+    document.getElementById('closeKnowledgeBtn').addEventListener('click', () => {
+        document.getElementById('knowledgeModal').classList.add('hidden');
+    });
     document.getElementById('viewLegacyBtn').addEventListener('click', () => {
         document.getElementById('menuModal').classList.add('hidden'); openLegacyModal();
     });
@@ -1785,6 +1947,58 @@ window.removeItem = function(idx) {
     state.gameState.inventory.splice(idx,1); renderInventoryModal(); updateStatus();
     saveGameStateFor(state.activeCharId, state.gameState);
 };
+
+function openKnowledgeModal() {
+    document.getElementById('knowledgeModal').classList.remove('hidden');
+    renderKnowledgeModalContent();
+}
+
+function renderKnowledgeModalContent() {
+    const container = document.getElementById('knowledgeModalContent');
+    if (!container) return;
+    const knowledges = state.gameState.knowledges || [];
+    const abilities  = state.gameState.learnedAbilities || [];
+    const levelLabel = l => l===1 ? 'Básico' : l===2 ? 'Intermedio' : 'Avanzado';
+    const typeIcon   = t => ({ magic:'✨', lore:'📜', language:'🗣️', skill:'⚙️', craft:'🔨' }[t] || '•');
+    const catIcon    = c => ({ spell:'✨', combat:'⚔️', social:'💬', craft:'🔨', skill:'⚙️' }[c] || '•');
+
+    const knSection = knowledges.length === 0
+        ? '<div class="inv-empty">Sin conocimientos adicionales adquiridos.</div>'
+        : knowledges.map(k => `
+            <div class="npc-card" style="margin-bottom:0.5rem">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="font-size:1.1rem">${typeIcon(k.type)}</span>
+                    <div>
+                        <div style="font-weight:600;color:var(--accent)">${k.name}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">${levelLabel(k.level)}${k.source ? ' · Fuente: '+k.source : ''}</div>
+                        ${k.description ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.2rem">${k.description}</div>` : ''}
+                    </div>
+                </div>
+            </div>`).join('');
+
+    const abSection = abilities.length === 0
+        ? '<div class="inv-empty">Sin habilidades adicionales aprendidas.</div>'
+        : abilities.map(a => `
+            <div class="npc-card" style="margin-bottom:0.5rem">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="font-size:1.1rem">${catIcon(a.category)}</span>
+                    <div>
+                        <div style="font-weight:600;color:var(--accent)">${a.name}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">${a.category} · usa ${a.stat}${a.dcBonus ? ' · DC+'+a.dcBonus : ''}${a.source ? ' · '+a.source : ''}</div>
+                        ${a.description ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.2rem">${a.description}</div>` : ''}
+                    </div>
+                </div>
+            </div>`).join('');
+
+    container.innerHTML = `
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.75rem">
+            Todo lo que ${state.character?.name} ha aprendido a lo largo de su historia.
+        </div>
+        <div style="font-size:0.85rem;font-family:Cinzel,serif;color:var(--accent);margin-bottom:0.4rem;border-bottom:1px solid var(--border);padding-bottom:0.3rem">📚 Conocimientos</div>
+        ${knSection}
+        <div style="font-size:0.85rem;font-family:Cinzel,serif;color:var(--accent);margin:0.75rem 0 0.4rem;border-bottom:1px solid var(--border);padding-bottom:0.3rem">⚡ Habilidades Activas</div>
+        ${abSection}`;
+}
 
 function openLegacyModal() {
     const modal = document.getElementById('legacyModal');
@@ -2034,11 +2248,11 @@ async function callAndRespond(action, rollResult) {
             console.log('IA RAW RESPONSE:', response);
         }
 
-        let { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate } = parseLlmResponse(response);
+        let { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate } = parseLlmResponse(response);
 
         // Debug logging
         if (DEBUG_IA_COMMUNICATION) {
-            console.log('PARSED IA RESPONSE:', { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate });
+            console.log('PARSED IA RESPONSE:', { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate });
         }
 
         // Fallback: if IA didn't request a roll but we think it should have, try again with more explicit instructions
@@ -2062,11 +2276,11 @@ async function callAndRespond(action, rollResult) {
                     console.log('IA RESPONSE TO INSISTENT PROMPT:', insistentResponse);
                 }
 
-                const { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate } = parseLlmResponse(insistentResponse);
+                const { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate, learnUpdate: insistentLearnUpdate } = parseLlmResponse(insistentResponse);
 
                 // Debug logging
                 if (DEBUG_IA_COMMUNICATION) {
-                    console.log('PARSED INSISTENT IA RESPONSE:', { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate });
+                    console.log('PARSED INSISTENT IA RESPONSE:', { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate, learnUpdate: insistentLearnUpdate });
                 }
 
                 // Use the insistent response if it provided a roll request, otherwise stick with original
@@ -2078,12 +2292,14 @@ async function callAndRespond(action, rollResult) {
                     deathNarration = insistentDeathNarration;
                     rollRequest = insistentRollRequest;
                     npcUpdate = insistentNpcUpdate;
+                    learnUpdate = insistentLearnUpdate;
                     if (insistentNpcUpdate) processNpcUpdate(insistentNpcUpdate);
                 }
             }
         }
 
         if (npcUpdate) processNpcUpdate(npcUpdate);
+        if (learnUpdate) processLearnUpdate(learnUpdate);
         document.getElementById('typingIndicator')?.remove();
 
         // Ensure companions and relationships are initialized
@@ -2229,6 +2445,16 @@ function buildPrompt(playerAction, rollResult) {
     }).join('\n') : '';
     const curseNote = state.gameState.curse ? `\nMALDICIÓN ACTIVA: ${state.gameState.curse}` : '';
     const classLabel = state.gameState.classEvolution ? `${char.classe} (evolucionando: ${state.gameState.classEvolution})` : char.classe;
+    const classAbilities = CLASS_ABILITIES[char.classe];
+    const knowledges = state.gameState.knowledges || [];
+    const learnedAbilities = state.gameState.learnedAbilities || [];
+    const knowledgesStr = knowledges.length
+        ? knowledges.map(k => `${k.name} (${k.type}, nivel ${k.level}${k.source ? ', fuente: '+k.source : ''})`).join('; ')
+        : 'ninguno';
+    const abilitiesStr = learnedAbilities.length
+        ? learnedAbilities.map(a => `${a.name} [${a.category}, usa ${a.stat}${a.dcBonus ? ', DC-'+a.dcBonus : ''}]`).join('; ')
+        : 'ninguna';
+    const classRulesSection = classAbilities ? `\nRESTRICCIONES DE CLASE — OBLIGATORIO:\n${char.name} es ${char.classe}. PUEDE naturalmente: ${classAbilities.can.join(', ')}.\nPOR DEFECTO NO PUEDE: ${classAbilities.cannot.join(', ')}.\n\nCONOCIMIENTOS ADQUIRIDOS (lo que ha estudiado y aprendido a lo largo del juego):\n${knowledgesStr}\n\nHABILIDADES APRENDIDAS (lo que puede hacer activamente):\n${abilitiesStr}\n\nREGLA DE EXCEPCIONES: Si el personaje intenta algo fuera de su clase pero tiene el conocimiento adquirido relevante, puede intentarlo con DC aumentado (+3). Si no tiene el conocimiento, narra que le es imposible por ignorancia — no es fracaso de tirada, es incapacidad. No hay excepciones sin conocimiento registrado.\n\nCUANDO EL PERSONAJE APRENDE ALGO NUEVO (estudia un libro, recibe entrenamiento, descubre un secreto profundo) añade al final de tu respuesta:\n[LEARN: {"type":"knowledge","id":"id_unico","name":"Nombre del conocimiento","category":"magic|lore|language|skill|craft","level":1,"source":"De dónde lo aprendió","description":"qué sabe exactamente"}]\nSi el aprendizaje le da una nueva habilidad activa:\n[LEARN: {"type":"ability","id":"id_unico","name":"Nombre de la habilidad","category":"spell|combat|social|craft","stat":"FUE|DES|CON|INT|SAB|CAR","dcBonus":0,"source":"De dónde","description":"qué puede hacer"}]\nUSA [LEARN:] solo cuando sea un aprendizaje significativo y permanente, no para acciones cotidianas.\n` : '';
 
     const system = `Eres el Maestro de Mazmorras de una campaña de D&D en un mundo de fantasía oscura medieval. Narras en segunda persona con prosa cinematográfica.
 
@@ -2249,7 +2475,7 @@ ESTADO:
 - Compañeros: ${companions}
 - Relaciones: ${rels}${npcSection}
 ${worldSection}${rollSection}
-
+${classRulesSection}
 INSTRUCCIONES:
 - **REGLA DE OBLIGATORIO CUMPLIMIENTO**: Cuando veas "[ACTION SELECCIONADA] X" en el prompt del usuario, debes interpretar "X" como la acción que el personaje ha seleccionado realizar. Describe las consecuencias de esa acción sin repetir literalmente "X". Muestra lo que sucede como resultado de esa elección.
 - 60-120 palabras de narración. Conciso, cinematográfico, sin descripciones de entorno innecesarias. Ve al grano.
@@ -2351,29 +2577,60 @@ async function generateNpcPortrait(npc) {
     const url = `https://image.pollinations.ai/prompt/${prompt}?width=256&height=256&seed=${Math.floor(Math.random()*9999)}&nologo=true`;
     npc.portrait = url;
     fsSaveGameState(state.activeCharId);
-    // Refresh NPC panel if open
     const panel = document.getElementById('npcModalContent');
     if (panel) renderNpcModalContent();
 }
 
-function processNpcUpdate(update) {
-    // Validate input
-    if (!update || typeof update !== 'object' || !update.name || typeof update.name !== 'string' || update.name.trim() === '') {
-        if (DEBUG_IA_COMMUNICATION) {
-            console.warn('Invalid NPC update received:', update);
+function processLearnUpdate(update) {
+    if (!update || !update.type || !update.name) return;
+    if (!Array.isArray(state.gameState.knowledges)) state.gameState.knowledges = [];
+    if (!Array.isArray(state.gameState.learnedAbilities)) state.gameState.learnedAbilities = [];
+
+    if (update.type === 'knowledge') {
+        const id = update.id || update.name.toLowerCase().replace(/\s+/g,'_');
+        const existing = state.gameState.knowledges.find(k => k.id === id);
+        if (existing) {
+            if (update.level && update.level > existing.level) existing.level = update.level;
+        } else {
+            state.gameState.knowledges.push({
+                id,
+                name:        update.name,
+                type:        update.category || update.type || 'skill',
+                level:       update.level || 1,
+                source:      update.source || '',
+                description: update.description || ''
+            });
         }
-        return;
+    } else if (update.type === 'ability') {
+        const id = update.id || update.name.toLowerCase().replace(/\s+/g,'_');
+        const existing = state.gameState.learnedAbilities.find(a => a.id === id);
+        if (!existing) {
+            state.gameState.learnedAbilities.push({
+                id,
+                name:        update.name,
+                category:    update.category || 'skill',
+                stat:        update.stat || 'INT',
+                dcBonus:     update.dcBonus || update.dc_bonus || 0,
+                source:      update.source || '',
+                description: update.description || ''
+            });
+        }
     }
 
-    // Ensure NPCs array exists
+    fsSaveGameState(state.activeCharId);
+    const panel = document.getElementById('knowledgeModalContent');
+    if (panel) renderKnowledgeModalContent();
+}
+
+function processNpcUpdate(update) {
+    if (!update || typeof update !== 'object' || !update.name || typeof update.name !== 'string' || update.name.trim() === '') {
+        if (DEBUG_IA_COMMUNICATION) { console.warn('Invalid NPC update received:', update); }
+        return;
+    }
     if (!state.gameState.npcs) state.gameState.npcs = [];
-
-    // Sanitize name
     const sanitizedName = update.name.trim();
-
     const existing = state.gameState.npcs.find(n => n.name.toLowerCase() === sanitizedName.toLowerCase());
     if (existing) {
-        // Validate and clamp relationship
         if (update.relationship !== undefined) {
             const rel = parseInt(update.relationship);
             if (!isNaN(rel)) {
@@ -2383,166 +2640,50 @@ function processNpcUpdate(update) {
                     existing.relationship = clampedRel;
                     existing.relationshipLabel = getNpcRelTier(existing.relationship).label;
                 }
-            } else if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid relationship value for NPC:', update.relationship);
             }
         }
-
-        // Validate and add fact
         if (update.fact && typeof update.fact === 'string' && update.fact.trim() !== '') {
             const fact = update.fact.trim();
-            if (!existing.knownFacts.includes(fact)) {
-                existing.knownFacts.push(fact);
-            }
-        } else if (DEBUG_IA_COMMUNICATION && update.fact !== undefined) {
-            console.warn('Invalid fact value for NPC:', update.fact);
+            if (!existing.knownFacts.includes(fact)) existing.knownFacts.push(fact);
         }
-
-        // Validate and add good memory
         if (update.goodMemory && typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '') {
             const goodMemory = update.goodMemory.trim();
-            if (!existing.goodMemories.includes(goodMemory)) {
-                existing.goodMemories.push(goodMemory);
-            }
-        } else if (DEBUG_IA_COMMUNICATION && update.goodMemory !== undefined) {
-            console.warn('Invalid goodMemory value for NPC:', update.goodMemory);
+            if (!existing.goodMemories.includes(goodMemory)) existing.goodMemories.push(goodMemory);
         }
-
-        // Validate and add bad memory
         if (update.badMemory && typeof update.badMemory === 'string' && update.badMemory.trim() !== '') {
             const badMemory = update.badMemory.trim();
-            if (!existing.badMemories.includes(badMemory)) {
-                existing.badMemories.push(badMemory);
-            }
-        } else if (DEBUG_IA_COMMUNICATION && update.badMemory !== undefined) {
-            console.warn('Invalid bad memory value for NPC:', update.badMemory);
+            if (!existing.badMemories.includes(badMemory)) existing.badMemories.push(badMemory);
         }
-
-        // Validate and set race
-        if (update.race !== undefined) {
-            if (typeof update.race === 'string') {
-                const race = update.race.trim();
-                if (race !== '' && existing.race !== race) {
-                    existing.race = race;
-                }
-            } else if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid race value for NPC:', update.race);
-            }
+        if (update.race !== undefined && typeof update.race === 'string') { const r = update.race.trim(); if (r) existing.race = r; }
+        if (update.role !== undefined && typeof update.role === 'string') { const r = update.role.trim(); if (r) existing.role = r; }
+        if (update.lastSeen !== undefined && typeof update.lastSeen === 'string') { const r = update.lastSeen.trim(); if (r) existing.lastSeen = r; }
+        if (update.portraitHint !== undefined && typeof update.portraitHint === 'string') {
+            const ph = update.portraitHint.trim();
+            if (ph && existing.portraitHint !== ph) { existing.portraitHint = ph; generateNpcPortrait(existing); }
         }
-
-        // Validate and set role
-        if (update.role !== undefined) {
-            if (typeof update.role === 'string') {
-                const role = update.role.trim();
-                if (role !== '' && existing.role !== role) {
-                    existing.role = role;
-                }
-            } else if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid role value for NPC:', update.role);
-            }
-        }
-
-        // Validate and set lastSeen
-        if (update.lastSeen !== undefined) {
-            if (typeof update.lastSeen === 'string') {
-                const lastSeen = update.lastSeen.trim();
-                if (lastSeen !== '' && existing.lastSeen !== lastSeen) {
-                    existing.lastSeen = lastSeen;
-                }
-            } else if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid lastSeen value for NPC:', update.lastSeen);
-            }
-        }
-
-        // Validate and set portraitHint
-        if (update.portraitHint !== undefined) {
-            if (typeof update.portraitHint === 'string') {
-                const portraitHint = update.portraitHint.trim();
-                if (portraitHint !== '' && existing.portraitHint !== portraitHint) {
-                    existing.portraitHint = portraitHint;
-                    generateNpcPortrait(existing);
-                }
-            } else if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid portraitHint value for NPC:', update.portraitHint);
-            }
-        }
-
-        // Validate and set notes
-        if (update.notes !== undefined) {
-            if (typeof update.notes === 'string') {
-                const notes = update.notes.trim();
-                if (existing.notes !== notes) {
-                    existing.notes = notes;
-                }
-            } else if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid notes value for NPC:', update.notes);
-            }
-        }
+        if (update.notes !== undefined && typeof update.notes === 'string') existing.notes = update.notes.trim();
     } else {
-        // Validate relationship for new NPC
         let relationship = 0;
         if (update.relationship !== undefined) {
             const rel = parseInt(update.relationship);
-            if (!isNaN(rel)) {
-                relationship = Math.min(5, Math.max(-3, rel));
-            } else if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Invalid relationship value for new NPC:', update.relationship);
-            }
+            if (!isNaN(rel)) relationship = Math.min(5, Math.max(-3, rel));
         }
-
         const tier = NPC_REL_TIERS.find(t => t.value === relationship) || NPC_REL_TIERS[3];
-
-        // Validate and sanitize string fields
         const name = sanitizedName;
         const race = (typeof update.race === 'string') ? update.race.trim() : '';
         const role = (typeof update.role === 'string') ? update.role.trim() : '';
         const gender = (typeof update.gender === 'string') ? update.gender.trim() : '';
         const portraitHint = (typeof update.portraitHint === 'string') ? update.portraitHint.trim() : '';
-        const lastSeen = (typeof update.lastSeen === 'string' && update.lastSeen.trim() !== '')
-            ? update.lastSeen.trim()
-            : (state.gameState.location || '');
+        const lastSeen = (typeof update.lastSeen === 'string' && update.lastSeen.trim() !== '') ? update.lastSeen.trim() : (state.gameState.location || '');
         const notes = (typeof update.notes === 'string') ? update.notes.trim() : '';
-
-        // Validate array fields
-        const knownFacts = Array.isArray(update.fact)
-            ? update.fact.filter(f => typeof f === 'string' && f.trim() !== '').map(f => f.trim())
-            : (typeof update.fact === 'string' && update.fact.trim() !== '')
-                ? [update.fact.trim()]
-                : [];
-
-        const goodMemories = Array.isArray(update.goodMemory)
-            ? update.goodMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim())
-            : (typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '')
-                ? [update.goodMemory.trim()]
-                : [];
-
-        const badMemories = Array.isArray(update.badMemory)
-            ? update.badMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim())
-            : (typeof update.badMemory === 'string' && update.badMemory.trim() !== '')
-                ? [update.badMemory.trim()]
-                : [];
-
-        const npc = {
-            id: name.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now(),
-            name,
-            race,
-            role,
-            gender,
-            portrait: null,
-            portraitHint,
-            relationship,
-            relationshipLabel: tier.label,
-            knownFacts,
-            goodMemories,
-            badMemories,
-            lastSeen,
-            notes
-        };
+        const knownFacts = Array.isArray(update.fact) ? update.fact.filter(f => typeof f === 'string' && f.trim() !== '').map(f => f.trim()) : (typeof update.fact === 'string' && update.fact.trim() !== '') ? [update.fact.trim()] : [];
+        const goodMemories = Array.isArray(update.goodMemory) ? update.goodMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim()) : (typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '') ? [update.goodMemory.trim()] : [];
+        const badMemories = Array.isArray(update.badMemory) ? update.badMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim()) : (typeof update.badMemory === 'string' && update.badMemory.trim() !== '') ? [update.badMemory.trim()] : [];
+        const npc = { id: name.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now(), name, race, role, gender, portrait: null, portraitHint, relationship, relationshipLabel: tier.label, knownFacts, goodMemories, badMemories, lastSeen, notes };
         state.gameState.npcs.push(npc);
         generateNpcPortrait(npc);
     }
     fsSaveGameState(state.activeCharId);
-    // Live-refresh if panel open
     const panel = document.getElementById('npcModalContent');
     if (panel) renderNpcModalContent();
 }
@@ -2551,83 +2692,44 @@ function parseLlmResponse(response) {
     let narration = response;
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
-    const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\]+)\]?/);
+    const actionsMatch = response.match(/\[ACTIONS:\s*(\[\s\S]*?\]+)\]?/);
     if (actionsMatch) {
-        try {
-            const jsonStr = actionsMatch[1].replace(/\]+$/, ']');
-            actions = JSON.parse(jsonStr);
-        } catch(e) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Failed to parse ACTIONS block:', actionsMatch[1], e);
-            }
-        }
+        try { const jsonStr = actionsMatch[1].replace(/\]+$/, ']'); actions = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ACTIONS block:', actionsMatch[1], e); }
         narration = narration.replace(actionsMatch[0],'').trim();
     }
-
     const stateMatch = response.match(/\[STATE:\s*(\{[\s\S]*?\}+)\]?/);
     if (stateMatch) {
-        try {
-            const jsonStr = stateMatch[1].replace(/\}+$/, '}');
-            stateUpdates = JSON.parse(jsonStr);
-        } catch(e) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Failed to parse STATE block:', stateMatch[1], e);
-            }
-        }
+        try { const jsonStr = stateMatch[1].replace(/\}+$/, '}'); stateUpdates = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse STATE block:', stateMatch[1], e); }
         narration = narration.replace(stateMatch[0],'').trim();
     }
-
     const legacyMatch = response.match(/\[LEGACY:\s*(\{[\s\S]*?\}+)\]?/);
     if (legacyMatch) {
-        try {
-            const jsonStr = legacyMatch[1].replace(/\}+$/, '}');
-            legacy = JSON.parse(jsonStr);
-        } catch(e) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Failed to parse LEGACY block:', legacyMatch[1], e);
-            }
-        }
+        try { const jsonStr = legacyMatch[1].replace(/\}+$/, '}'); legacy = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEGACY block:', legacyMatch[1], e); }
         narration = narration.replace(legacyMatch[0],'').trim();
     }
-
     const rollMatch = response.match(/\[ROLL:\s*(\{[\s\S]*?\}+)\]?/);
     if (rollMatch) {
         try {
             const jsonStr = rollMatch[1].replace(/\}+$/, '}');
             const r = JSON.parse(jsonStr);
-            rollRequest = {
-                skill: r.skill || 'Habilidad',
-                stat: r.stat || guessStatFromSkill(r.skill || ''),
-                dc: parseInt(r.dc) || 12,
-                reason: r.reason || ''
-            };
-        } catch(e) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Failed to parse ROLL block:', rollMatch[1], e);
-            }
-        }
+            rollRequest = { skill: r.skill || 'Habilidad', stat: r.stat || guessStatFromSkill(r.skill || ''), dc: parseInt(r.dc) || 12, reason: r.reason || '' };
+        } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ROLL block:', rollMatch[1], e); }
         narration = narration.replace(rollMatch[0],'').trim();
     }
-
-    if (stateUpdates?.hp <= 0) {
-        deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200);
-    }
-
+    if (stateUpdates?.hp <= 0) { deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200); }
     const npcMatch = response.match(/\[NPC:\s*(\{[\s\S]*?\}+)\]?/);
     let npcUpdate = null;
     if (npcMatch) {
-        try {
-            const jsonStr = npcMatch[1].replace(/\}+$/, '}');
-            npcUpdate = JSON.parse(jsonStr);
-        } catch(e) {
-            if (DEBUG_IA_COMMUNICATION) {
-                console.warn('Failed to parse NPC block:', npcMatch[1], e);
-            }
-        }
+        try { const jsonStr = npcMatch[1].replace(/\}+$/, '}'); npcUpdate = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse NPC block:', npcMatch[1], e); }
         narration = narration.replace(npcMatch[0],'').trim();
     }
-
-    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate };
+    const learnMatch = response.match(/\[LEARN:\s*(\{[\s\S]*?\}+)\]?/);
+    let learnUpdate = null;
+    if (learnMatch) {
+        try { const jsonStr = learnMatch[1].replace(/\}+$/, '}'); learnUpdate = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEARN block:', learnMatch[1], e); }
+        narration = narration.replace(learnMatch[0],'').trim();
+    }
+    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate };
 }
 
 async function summarizeContext() {
@@ -2643,7 +2745,6 @@ async function summarizeContext() {
         if (state.chatHistory.length > 30) state.chatHistory = state.chatHistory.slice(-20);
     } catch(e) {
         console.warn('Error al resumir el contexto (no crítico):', e);
-        // No afecta al gameplay, solo al resumen de contexto
     }
 }
 
