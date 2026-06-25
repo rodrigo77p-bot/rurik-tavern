@@ -921,6 +921,40 @@ function updateClassEvolution() {
     state.gameState.classEvolution = evo;
 }
 
+// Experience and leveling system
+function addExperience(amount) {
+    if (!state.character) return;
+
+    state.character.experience += amount;
+
+    // XP needed for next level: level * 100 (so level 2 needs 200 XP total, level 3 needs 300, etc.)
+    // This means to go from level N to N+1, you need (N+1) * 100 XP
+    const xpForNextLevel = (state.character.level + 1) * 100;
+
+    // Check if we've leveled up
+    while (state.character.experience >= xpForNextLevel) {
+        state.character.experience -= xpForNextLevel;
+        state.character.level++;
+        state.character.skillPoints += 2; // Grant 2 skill points per level up
+
+        // Check for class evolution after leveling up (since stats might have increased via skill points)
+        updateClassEvolution();
+
+        // Update xpForNextLevel for the new level
+        xpForNextLevel = (state.character.level + 1) * 100;
+
+        // Notify player of level up
+        addDMMessage(`¡Has alcanzado el nivel ${state.character.level}! Has ganado 2 puntos de habilidad para asignar a tus estadísticas.`);
+
+        // Update UI
+        updateStatus();
+        updatePartyPanel();
+    }
+
+    // Save game state
+    saveGameStateFor(state.activeCharId, state.gameState);
+}
+
 window.useAction = function(text) {
     const input = document.getElementById('playerInput');
     const btn = document.getElementById('sendBtn');
@@ -956,18 +990,23 @@ async function init() {
     `;
     document.head.appendChild(style);
 
-    await new Promise(resolve => {
-        const unsub = fbAuth.onAuthStateChanged(user => { unsub(); fbUser = user; resolve(); });
-    });
+    // If Firebase SDK didn't load (fbAuth is null), skip auth and sync
+    if (fbAuth !== null) {
+        await new Promise(resolve => {
+            const unsub = fbAuth.onAuthStateChanged(user => { unsub(); fbUser = user; resolve(); });
+        });
+        if (!fbUser) { showScreen('auth'); return; }
 
-    if (!fbUser) { showScreen('auth'); return; }
-
-    const loadingEl = document.createElement('div');
-    loadingEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0d0a07;color:#c9a84c;font-family:Cinzel,serif;font-size:1rem;letter-spacing:0.1em';
-    loadingEl.textContent = 'Sincronizando...';
-    document.body.appendChild(loadingEl);
-    await syncFromFirestore();
-    loadingEl.remove();
+        const loadingEl = document.createElement('div');
+        loadingEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0d0a07;color:#c9a84c;font-family:Cinzel,serif;font-size:1rem;letter-spacing:0.1em';
+        loadingEl.textContent = 'Sincronizando...';
+        document.body.appendChild(loadingEl);
+        await syncFromFirestore();
+        loadingEl.remove();
+    } else {
+        // Firebase not available, continue with localStorage only
+        // No need to set fbUser; we'll just skip sync.
+    }
 
     state.apiKey = localStorage.getItem('groqApiKey');
     if (!state.apiKey) { showScreen('apiKey'); return; }
@@ -1005,6 +1044,10 @@ function loadCharacter(charId) {
         state.gameState.maxHp = 10+conMod;
         state.gameState.hp = state.gameState.maxHp;
     }
+    // Ensure character has experience, level, and skillPoints fields for backward compatibility
+    if (!state.character.hasOwnProperty('experience')) state.character.experience = 0;
+    if (!state.character.hasOwnProperty('level')) state.character.level = 1;
+    if (!state.character.hasOwnProperty('skillPoints')) state.character.skillPoints = 0;
     state.chatHistory = getChatHistory(charId);
     state.adventure = getAdventure(charId);
     state.turnCount = 0;
@@ -1146,6 +1189,7 @@ function renderChatScreen() {
             <div>📍 <span id="locationDisplay">${state.gameState.location}</span></div>
             <div>🌙 <span id="timeDisplay">${state.gameState.timeOfDay}</span></div>
             <div>🎒 <span id="inventoryDisplay">${state.gameState.inventory.join(', ')||'Vacío'}</span></div>
+            <div>⚔️ <span id="levelDisplay">Nivel 1 (0/100 XP)</span></div>
         </div>
         <div id="menuModal" class="modal hidden"><div class="modal-box">
             <div class="modal-title">Menú — ${state.character?.name}</div>
@@ -1479,7 +1523,8 @@ function bindCharacterCreation() {
             gender: document.getElementById('charGender').value,
             appearance: document.getElementById('charAppearance').value.trim(),
             portraitSeed: Math.floor(Math.random() * 99999),
-            stats: state.tempStats, status:'alive', created: new Date().toISOString().slice(0,10)
+            stats: state.tempStats, status:'alive', created: new Date().toISOString().slice(0,10),
+            experience: 0, level: 1, skillPoints: 0
         };
         updateCharData(char);
         state.activeCharId = id;
@@ -1598,6 +1643,62 @@ function bindChat() {
     async function sendMessage() {
         const action = playerInput.value.trim();
         if (!action) return;
+
+        // Handle /asignar command for skill point allocation
+        if (action.startsWith('/asignar')) {
+            const parts = action.split(' ');
+            if (parts.length !== 3) {
+                addDMMessage('Uso correcto: /asignar <estadistica> <puntos>\nEjemplo: /asignar FUE 2\nEstadísticas disponibles: FUE, DES, CON, INT, SAB, CAR');
+                playerInput.value = '';
+                return;
+            }
+
+            const stat = parts[1].toUpperCase();
+            const points = parseInt(parts[2]);
+
+            if (isNaN(points) || points <= 0) {
+                addDMMessage('Los puntos deben ser un número positivo.');
+                playerInput.value = '';
+                return;
+            }
+
+            const validStats = ['FUE', 'DES', 'CON', 'INT', 'SAB', 'CAR'];
+            if (!validStats.includes(stat)) {
+                addDMMessage('Estadística no válida. Use: FUE, DES, CON, INT, SAB o CAR.');
+                playerInput.value = '';
+                return;
+            }
+
+            if (state.character.skillPoints < points) {
+                addDMMessage(`No tienes suficientes puntos de habilidad. Disponibles: ${state.character.skillPoints}`);
+                playerInput.value = '';
+                return;
+            }
+
+            // Apply the points to the selected stat
+            state.character.stats[stat] += points;
+            state.character.skillPoints -= points;
+
+            // Check for class evolution after increasing stats
+            updateClassEvolution();
+
+            // Update max HP if CON was increased
+            if (stat === 'CON') {
+                const conMod = Math.floor((state.character.stats.CON - 10) / 2);
+                state.gameState.maxHp = 10 + conMod;
+                if (state.gameState.hp > state.gameState.maxHp) {
+                    state.gameState.hp = state.gameState.maxHp;
+                }
+            }
+
+            addDMMessage(`Has asignado ${points} punto(s) a ${stat}. Nueva estadística: ${stat} ${state.character.stats[stat]} (${Math.floor((state.character.stats[stat]-10)/2)>=0?'+':''}${Math.floor((state.character.stats[stat]-10)/2)})`);
+            updateStatus();
+            updatePartyPanel();
+            saveGameStateFor(state.activeCharId, state.gameState);
+            playerInput.value = '';
+            return;
+        }
+
         // Clear input immediately so user can prepare next action
         playerInput.value = '';
         state.pendingRoll = null; // clear any stale roll
@@ -1677,8 +1778,16 @@ function bindChat() {
     document.getElementById('closeInvBtn').addEventListener('click', () => document.getElementById('inventoryModal').classList.add('hidden'));
     document.getElementById('addItemBtn').addEventListener('click', () => {
         const input = document.getElementById('newItemInput');
-        const item = input.value.trim();
-        if (item) { state.gameState.inventory.push(item); input.value = ''; renderInventoryModal(); updateStatus(); saveGameStateFor(state.activeCharId, state.gameState); }
+        const itemName = input.value.trim();
+        if (itemName) {
+            // Create Item object from the item name
+            const newItem = createItemFromName(itemName);
+            state.gameState.inventory.push(newItem);
+            input.value = '';
+            renderInventoryModal();
+            updateStatus();
+            saveGameStateFor(state.activeCharId, state.gameState);
+        }
     });
     document.getElementById('newItemInput').addEventListener('keypress', e => { if (e.key==='Enter') document.getElementById('addItemBtn').click(); });
 
@@ -1770,7 +1879,29 @@ function renderInventoryModal() {
     if (!list) return;
     list.innerHTML = state.gameState.inventory.length === 0
         ? '<div class="inv-empty">El inventario está vacío</div>'
-        : state.gameState.inventory.map((item,i) => `<div class="inv-item"><span>${item}</span><button class="inv-remove" onclick="removeItem(${i})">✕</button></div>`).join('');
+        : state.gameState.inventory.map((item,i) => {
+            const itemName = typeof item === 'string' ? item : item.name;
+            const itemType = typeof item === 'string' ? 'objeto' : (item.type || 'objeto');
+            const itemRarity = typeof item === 'string' ? 'común' : (item.rarity || 'común');
+            const itemDamage = typeof item === 'string' ? null : item.damage;
+
+            let badge = '';
+            if (itemType === 'arma' && itemDamage !== null) {
+                badge = `<span class="item-badge">Daño: ${itemDamage}</span>`;
+            } else if (itemType === 'armadura') {
+                badge = `<span class="item-badge">Armadura</span>`;
+            } else if (itemType === 'consumible') {
+                badge = `<span class="item-badge">Consumible</span>`;
+            } else if (itemType === 'tesoro') {
+                badge = `<span class="item-badge">Tesoro</span>`;
+            }
+
+            return `<div class="inv-item">
+                <span>${itemName}</span>
+                ${badge ? `<span class="item-info">${itemType} (${itemRarity}) ${badge}</span>` : `<span class="item-info">${itemType} (${itemRarity})</span>`}
+                <button class="inv-remove" onclick="removeItem(${i})">✕</button>
+            </div>`;
+        }).join('');
 }
 window.removeItem = function(idx) {
     state.gameState.inventory.splice(idx,1); renderInventoryModal(); updateStatus();
@@ -1873,7 +2004,30 @@ function updateStatus() {
     if (el('hpDisplay')) el('hpDisplay').textContent = `${state.gameState.hp}/${state.gameState.maxHp}`;
     if (el('locationDisplay')) el('locationDisplay').textContent = state.gameState.location;
     if (el('timeDisplay')) el('timeDisplay').textContent = state.gameState.timeOfDay;
-    if (el('inventoryDisplay')) el('inventoryDisplay').textContent = state.gameState.inventory.join(', ')||'Vacío';
+    if (el('inventoryDisplay')) {
+        if (state.gameState.inventory.length === 0) {
+            el('inventoryDisplay').textContent = 'Vacío';
+        } else {
+            // Show first few items with details
+            const itemsToShow = state.gameState.inventory.slice(0, 3);
+            const itemTexts = itemsToShow.map(item => {
+                const itemName = typeof item === 'string' ? item : item.name;
+                const itemType = typeof item === 'string' ? 'objeto' : (item.type || 'objeto');
+                return `${itemName} (${itemType})`;
+            });
+            let displayText = itemTexts.join(', ');
+            if (state.gameState.inventory.length > 3) {
+                displayText += `... (+${state.gameState.inventory.length - 3} más)`;
+            }
+            el('inventoryDisplay').textContent = displayText;
+        }
+    }
+    // Add level, XP, and skill points display
+    if (el('levelDisplay')) {
+        const xpForNextLevel = (state.character.level + 1) * 100;
+        const xpProgress = (state.character.experience / xpForNextLevel) * 100;
+        el('levelDisplay').textContent = `Nivel ${state.character.level} (${state.character.experience}/${xpForNextLevel} XP) ${state.character.skillPoints > 0 ? `[${state.character.skillPoints} pts]` : ''}`;
+    }
 }
 
 function openPartyModal() {
@@ -1916,6 +2070,11 @@ function openPartyModal() {
                 <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
                 <div class="hp-text">PV ${state.gameState.hp} / ${state.gameState.maxHp}</div>
                 <div class="stats-mini" style="margin-top:0.5rem">${Object.entries(char.stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `<div class="stat-mini"><span class="stat-label">${ab}</span><span class="stat-val">${v}</span><span class="stat-mod">${m>=0?'+':''}${m}</span></div>`;}).join('')}</div>
+                <div class="level-info" style="margin-top:0.5rem; font-size:0.9rem;">
+                    Nivel ${state.character.level}
+                    (${state.character.experience}/${((state.character.level + 1) * 100)} XP)
+                    ${state.character.skillPoints > 0 ? `[${state.character.skillPoints} puntos de habilidad disponibles]` : ''}
+                </div>
             </div>
         </div>
         ${companionHtml ? `<div class="companions-label" style="margin-bottom:0.5rem">Compañeros</div>${companionHtml}` : '<div style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:1rem">Aún no tienes compañeros</div>'}
@@ -2088,6 +2247,21 @@ async function callAndRespond(action, rollResult) {
             saveGameStateFor(state.activeCharId, state.gameState);
             triggerDeath(deathNarration || `${state.character.name} cayó en ${state.gameState.location}.`);
             return;
+        }
+
+        // Award XP for successful rolls
+        if (rollResult && rollResult.success) {
+            // Base XP for success + bonus based on difficulty
+            const baseXP = 10;
+            const difficultyBonus = Math.floor(rollResult.dc / 2); // More difficult rolls give more XP
+            const xpEarned = baseXP + difficultyBonus;
+            addExperience(xpEarned);
+        } else if (rollResult && !rollResult.success) {
+            // Give half XP for failed attempts (learning from mistakes)
+            const baseXP = 10;
+            const difficultyBonus = Math.floor(rollResult.dc / 2);
+            const xpEarned = Math.floor((baseXP + difficultyBonus) / 2);
+            addExperience(xpEarned);
         }
 
         // Check for curse
@@ -2587,5 +2761,5 @@ async function summarizeContext() {
     }
 }
 
-loadFirebaseSDK().then(() => init());
+loadFirebaseSDK().then(() => init()).catch(() => init());
 }
