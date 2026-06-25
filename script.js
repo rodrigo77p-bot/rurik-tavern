@@ -1098,7 +1098,6 @@ function renderChatScreen() {
         <div id="inventoryModal" class="modal hidden"><div class="modal-box">
             <div class="modal-title">🎒 Inventario</div>
             <div id="inventoryList" class="inv-list"></div>
-            <div class="inv-add-row"><input type="text" id="newItemInput" placeholder="Nuevo objeto..." class="inv-input"><button class="modal-btn small" id="addItemBtn">+ Añadir</button></div>
             <button class="modal-btn" id="closeInvBtn" style="margin-top:0.5rem">✓ Cerrar</button>
         </div></div>
         <div id="legacyModal" class="modal hidden"><div class="modal-box" style="max-width:480px">
@@ -1669,20 +1668,6 @@ function bindChat() {
 
     // Inventory
     document.getElementById('closeInvBtn').addEventListener('click', () => document.getElementById('inventoryModal').classList.add('hidden'));
-    document.getElementById('addItemBtn').addEventListener('click', () => {
-        const input = document.getElementById('newItemInput');
-        const itemName = input.value.trim();
-        if (itemName) {
-            // Create Item object from the item name
-            const newItem = createItemFromName(itemName);
-            state.gameState.inventory.push(newItem);
-            input.value = '';
-            renderInventoryModal();
-            updateStatus();
-            saveGameStateFor(state.activeCharId, state.gameState);
-        }
-    });
-    document.getElementById('newItemInput').addEventListener('keypress', e => { if (e.key==='Enter') document.getElementById('addItemBtn').click(); });
 
     // Legacy
     document.getElementById('closeLegacyBtn').addEventListener('click', () => document.getElementById('legacyModal').classList.add('hidden'));
@@ -2566,43 +2551,50 @@ function parseLlmResponse(response) {
     let narration = response;
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
-    const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\])\]/);
+    const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\]+)\]?/);
     if (actionsMatch) {
         try {
-            actions = JSON.parse(actionsMatch[1]);
+            const jsonStr = actionsMatch[1].replace(/\]+$/, ']');
+            actions = JSON.parse(jsonStr);
         } catch(e) {
             if (DEBUG_IA_COMMUNICATION) {
                 console.warn('Failed to parse ACTIONS block:', actionsMatch[1], e);
             }
         }
-    narration = narration.replace(actionsMatch[0],'').trim(); }
+        narration = narration.replace(actionsMatch[0],'').trim();
+    }
 
-    const stateMatch = response.match(/\[STATE:\s*(\{[\s\S]*?\})\]/);
+    const stateMatch = response.match(/\[STATE:\s*(\{[\s\S]*?\}+)\]?/);
     if (stateMatch) {
         try {
-            stateUpdates = JSON.parse(stateMatch[1]);
+            const jsonStr = stateMatch[1].replace(/\}+$/, '}');
+            stateUpdates = JSON.parse(jsonStr);
         } catch(e) {
             if (DEBUG_IA_COMMUNICATION) {
                 console.warn('Failed to parse STATE block:', stateMatch[1], e);
             }
         }
-    narration = narration.replace(stateMatch[0],'').trim(); }
+        narration = narration.replace(stateMatch[0],'').trim();
+    }
 
-    const legacyMatch = response.match(/\[LEGACY:\s*(\{[\s\S]*?\})\]/);
+    const legacyMatch = response.match(/\[LEGACY:\s*(\{[\s\S]*?\}+)\]?/);
     if (legacyMatch) {
         try {
-            legacy = JSON.parse(legacyMatch[1]);
+            const jsonStr = legacyMatch[1].replace(/\}+$/, '}');
+            legacy = JSON.parse(jsonStr);
         } catch(e) {
             if (DEBUG_IA_COMMUNICATION) {
                 console.warn('Failed to parse LEGACY block:', legacyMatch[1], e);
             }
         }
-    narration = narration.replace(legacyMatch[0],'').trim(); }
+        narration = narration.replace(legacyMatch[0],'').trim();
+    }
 
-    const rollMatch = response.match(/\[ROLL:\s*(\{[\s\S]*?\})\]/);
+    const rollMatch = response.match(/\[ROLL:\s*(\{[\s\S]*?\}+)\]?/);
     if (rollMatch) {
         try {
-            const r = JSON.parse(rollMatch[1]);
+            const jsonStr = rollMatch[1].replace(/\}+$/, '}');
+            const r = JSON.parse(jsonStr);
             rollRequest = {
                 skill: r.skill || 'Habilidad',
                 stat: r.stat || guessStatFromSkill(r.skill || ''),
@@ -2621,11 +2613,12 @@ function parseLlmResponse(response) {
         deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200);
     }
 
-    const npcMatch = response.match(/\[NPC:\s*(\{[\s\S]*?\})\]/);
+    const npcMatch = response.match(/\[NPC:\s*(\{[\s\S]*?\}+)\]?/);
     let npcUpdate = null;
     if (npcMatch) {
         try {
-            npcUpdate = JSON.parse(npcMatch[1]);
+            const jsonStr = npcMatch[1].replace(/\}+$/, '}');
+            npcUpdate = JSON.parse(jsonStr);
         } catch(e) {
             if (DEBUG_IA_COMMUNICATION) {
                 console.warn('Failed to parse NPC block:', npcMatch[1], e);
