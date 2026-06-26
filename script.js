@@ -292,6 +292,36 @@ const RACE_VISUALS = {
     'Gnomo':'gnome with large curious eyes'
 };
 
+// Rasgos raciales visibles (para el prompt del DM — en español)
+const RACE_APPEARANCE = {
+    'Humano':    'Sin rasgos raciales llamativos. Parece un humano corriente.',
+    'Elfo':      'Orejas puntiagudas, rasgos etéreos y delicados, movimientos gráciles. Claramente no humano, pero tampoco una hada — le faltan alas y aura mágica.',
+    'Enano':     'Baja estatura, complexión robusta, barba prominente. Inconfundiblemente enano.',
+    'Mediano':   'Estatura muy baja (aprox. 1 metro), pies grandes y velludos, expresión afable.',
+    'Tiefling':  'Pequeños cuernos en la frente, cola visible, ojos de color inusual. Ascendencia demoníaca evidente.',
+    'Vampiro':   'Piel extremadamente pálida, ojos rojizos, colmillos apenas visibles. Presencia inquietante.',
+    'Hada':      'Alas translúcidas, aura luminosa tenue, estatura pequeña, rasgos etéreos. Inconfundiblemente feérica.',
+    'Fauno':     'Pequeños cuernos, piernas con pezuñas, rasgos mezcla de humano y cabra.',
+    'Dragonborn':'Escamas visibles en piel y cara, rasgos reptilianos, complexión imponente.',
+    'Orco':      'Piel verdosa, colmillos prominentes, complexión muy poderosa.',
+    'Semiélfico':'Orejas ligeramente puntiagudas, rasgos a medio camino entre humano y elfo.',
+    'Gnomo':     'Estatura muy pequeña, ojos grandes y curiosos, expresión vivaz.'
+};
+
+// Ropa inicial por defecto según clase
+const CLASS_DEFAULT_OUTFIT = {
+    'Guerrero':   { ropa: 'Armadura de cuero endurecido con coderas de metal, capa marrón de viajero', arma: 'Espada de una mano', offhand: 'Escudo de madera reforzado', accesorio: '' },
+    'Mago':       { ropa: 'Túnica azul oscuro con bordados arcanos, cinturón de cuero con bolsillos', arma: 'Bastón de madera nudosa', offhand: '', accesorio: 'Bolsa de componentes mágicos' },
+    'Pícaro':     { ropa: 'Ropa oscura de cuero ligero, capucha que puede subirse, botas silenciosas', arma: 'Daga de hoja fina', offhand: 'Segunda daga', accesorio: 'Juego de ganzúas oculto' },
+    'Clérigo':    { ropa: 'Hábito de la orden con símbolo divino bordado, sandalias resistentes', arma: 'Maza ceremonial', offhand: 'Símbolo sagrado', accesorio: '' },
+    'Bardo':      { ropa: 'Ropas coloridas de viajero, chaleco con muchos bolsillos, botas de cuero', arma: 'Espada estoque ligera', offhand: '', accesorio: 'Instrumento musical (laúd o flauta)' },
+    'Druida':     { ropa: 'Túnica de lana natural sin teñir, cinturón de cuero trenzado con hojas secas', arma: 'Bastón de madera viva', offhand: '', accesorio: 'Bolsa de hierbas y semillas' },
+    'Explorador': { ropa: 'Ropa de cuero ligera verde y marrón, capa de camuflaje forestal, botas altas', arma: 'Arco largo', offhand: 'Carcaj con flechas', accesorio: 'Daga de caza en el cinturón' },
+    'Paladín':    { ropa: 'Armadura de placas pulida con símbolo divino en el pecho, capa blanca', arma: 'Espada larga sagrada', offhand: 'Escudo con emblema divino', accesorio: '' },
+    'Hechicero':  { ropa: 'Ropas elegantes pero extrañas, telas que parecen moverse solas, collar peculiar', arma: 'Varita de cristal', offhand: '', accesorio: 'Collar con gema que pulsa levemente' },
+    'Monje':      { ropa: 'Ropas sencillas de lino beige, faja ancha de tela, pies descalzos o sandalias', arma: 'Bastón de entrenamiento', offhand: '', accesorio: 'Cuentas de meditación en la muñeca' }
+};
+
 function getPortraitUrl(char, size=512) {
     if (!char) return '';
     const raceVisual = RACE_VISUALS[char.race] || char.race;
@@ -884,6 +914,53 @@ function rollD20(statValue, dc) {
     return { roll, mod, total, dc, success: total>=dc };
 }
 
+// Skills that trigger an opposed NPC roll
+const OPPOSED_ROLL_SKILLS = {
+    'Engaño':     { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Actuación':  { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Seducción':  { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Persuasión': { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Intimidación': { npcSkill: 'Resistencia', npcStat: 'CON', label: 'Resistencia del NPC' },
+};
+
+// Estimate NPC SAB/CON based on their relationship tier and role keywords
+function estimateNpcStat(stat) {
+    // Find the most recently referenced NPC in the last DM message
+    const lastDM = state.chatHistory.findLast(m => m.role === 'dm');
+    const npcList = state.gameState.npcs || [];
+    let targetNpc = null;
+
+    if (lastDM && npcList.length > 0) {
+        // Find which registered NPC appears in the last DM message
+        for (const npc of npcList) {
+            if (lastDM.content && lastDM.content.toLowerCase().includes(npc.name.toLowerCase())) {
+                targetNpc = npc;
+                break;
+            }
+        }
+    }
+
+    // Base stat: 10 (average human). Adjust by role keywords.
+    let base = 10;
+    if (targetNpc) {
+        const role = (targetNpc.role || '').toLowerCase();
+        const personality = (targetNpc.personality || '').toLowerCase();
+        // Wise/perceptive roles get higher SAB
+        if (stat === 'SAB') {
+            if (/mago|sabio|oráculo|sacerdote|druida|espía|detective|guard/.test(role)) base = 13;
+            if (/lord|noble|rey|comandante|líder/.test(role)) base = 12;
+            if (/astuto|sagaz|perceptivo|desconfiado/.test(personality)) base += 2;
+            if (/ingenuo|simple|confiado/.test(personality)) base -= 2;
+        }
+        // CON for intimidation resistance
+        if (stat === 'CON') {
+            if (/guerrero|soldado|guard|mercenario|campeón/.test(role)) base = 13;
+            if (/anciano|débil|asustado/.test(role + personality)) base = 8;
+        }
+    }
+    return Math.max(6, Math.min(18, base));
+}
+
 window.executeRoll = async function(dmMsgIdx) {
     if (!state.pendingRoll) return;
     const { trigger, statValue } = state.pendingRoll;
@@ -896,18 +973,40 @@ window.executeRoll = async function(dmMsgIdx) {
     state.gameState.skillUses[category]++;
     updateClassEvolution();
 
-    // Update player message to show roll result inline
+    // Build base roll message
+    const mod = result.mod >= 0 ? '+'+result.mod : result.mod;
+    let rollMsg = `[Tirada de ${trigger.skill}: d20=${result.roll} ${mod} = ${result.total} vs DC ${trigger.dc} → ${result.success ? '¡ÉXITO!' : 'FALLO'}]`;
+
+    // Opposed NPC roll for social skills
+    const opposedDef = OPPOSED_ROLL_SKILLS[trigger.skill];
+    let npcRollResult = null;
+    if (opposedDef) {
+        const npcStatVal = estimateNpcStat(opposedDef.npcStat);
+        const npcRoll = Math.floor(Math.random() * 20) + 1;
+        const npcMod = Math.floor((npcStatVal - 10) / 2);
+        const npcTotal = npcRoll + npcMod;
+        const npcModStr = npcMod >= 0 ? '+' + npcMod : '' + npcMod;
+        const playerWins = result.total >= npcTotal;
+
+        npcRollResult = { skill: opposedDef.npcSkill, stat: opposedDef.npcStat, roll: npcRoll, mod: npcMod, total: npcTotal, playerWins };
+
+        rollMsg += `\n[${opposedDef.label}: d20=${npcRoll} ${npcModStr} = ${npcTotal}]`;
+        rollMsg += `\n[RESULTADO OPUESTO: jugador ${result.total} vs NPC ${npcTotal} → ${playerWins ? 'JUGADOR GANA — el NPC no detecta el engaño / acepta' : 'NPC GANA — el NPC sospecha o resiste'}]`;
+        rollMsg += `\nIMPORTANTE PARA EL NARRADOR: ${playerWins
+            ? `El NPC no detecta nada sospechoso. Narra que acepta o cree al jugador.`
+            : `El NPC supera la tirada del jugador. Narra que el NPC sospecha, hace una pregunta difícil, o directamente descubre el engaño. La reacción debe ser proporcional a la diferencia (${npcTotal - result.total} puntos de ventaja NPC).`}`;
+    }
+
+    // Update player message to show roll result inline (include NPC roll if any)
     if (state.chatHistory[dmMsgIdx]) {
         state.chatHistory[dmMsgIdx].roll = result;
+        state.chatHistory[dmMsgIdx].npcRoll = npcRollResult;
         state.chatHistory[dmMsgIdx].rollState = null;
         const container = document.getElementById('chatContainer');
         const existing = container?.querySelector(`[data-idx="${dmMsgIdx}"]`);
         if (existing) existing.replaceWith(createMessageEl(state.chatHistory[dmMsgIdx], dmMsgIdx));
     }
 
-    // Auto-send roll result to AI for outcome narration
-    const mod = result.mod >= 0 ? '+'+result.mod : result.mod;
-    const rollMsg = `[Tirada de ${trigger.skill}: d20=${result.roll} ${mod} = ${result.total} vs DC ${trigger.dc} → ${result.success ? '¡ÉXITO!' : 'FALLO'}]`;
     const playerInput = document.getElementById('playerInput');
     const sendBtn = document.getElementById('sendBtn');
     if (playerInput) playerInput.disabled = true;
@@ -1088,6 +1187,11 @@ function loadCharacter(charId) {
         const starting = CLASS_STARTING_KNOWLEDGE[state.character.classe] || { knowledges:[], learnedAbilities:[] };
         state.gameState.learnedAbilities = starting.learnedAbilities.map(a=>({...a}));
     }
+    // Migrate: ensure equipped slots exist
+    if (!state.gameState.equipped) {
+        const defaultOutfit = CLASS_DEFAULT_OUTFIT[state.character.classe] || { ropa:'', arma:'', offhand:'', accesorio:'' };
+        state.gameState.equipped = { ...defaultOutfit };
+    }
     state.chatHistory = getChatHistory(charId);
     state.adventure = getAdventure(charId);
     state.turnCount = 0;
@@ -1197,6 +1301,28 @@ function renderCharacterCreationScreen() {
         <div class="input-group"><label>Trasfondo</label><select id="charBackground"><option value="">Elige...</option>${['Soldado','Criminal','Noble','Huérfano','Mercader','Erudito','Marginado'].map(v=>`<option value="${v}">${v}</option>`).join('')}</select></div>
         <div class="input-group"><label>Motivación (opcional)</label><input type="text" id="charMotivation" placeholder="Ej: vengar a mi familia..."></div>
         <div class="input-group"><label>Descripción física (para generar retrato)</label><textarea id="charAppearance" rows="2" placeholder="Ej: cabello negro largo, ojos grises, cicatriz en la mejilla, complexión atlética..." style="background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.6rem 0.75rem;border-radius:4px;font-size:0.9rem;font-family:'Lora',serif;resize:vertical"></textarea></div>
+        <div class="input-group">
+            <label>👗 Ropa y equipo inicial</label>
+            <p style="font-size:0.75rem;color:var(--text-muted);margin:0.25rem 0 0.5rem">Elige tu clase primero — aparecerá una sugerencia. Puedes editarla.</p>
+            <div style="display:grid;gap:0.4rem">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">👘 Ropa:</span>
+                    <input type="text" id="outfitRopa" placeholder="Ej: túnica de viajero, capa marrón..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">⚔️ Arma:</span>
+                    <input type="text" id="outfitArma" placeholder="Ej: espada de una mano, arco largo..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">🛡️ Mano 2:</span>
+                    <input type="text" id="outfitOffhand" placeholder="Ej: escudo, segunda daga..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">💍 Accesorio:</span>
+                    <input type="text" id="outfitAccesorio" placeholder="Ej: amuleto, bolsa de hierbas..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+            </div>
+        </div>
         <div class="input-group"><label>Estadísticas</label><button class="btn" id="rollStatsBtn" style="margin-top:0.25rem">🎲 Tirar Dados</button><div id="statsDisplay" style="margin-top:0.5rem;font-size:0.8rem;color:var(--text-muted);text-align:center"></div></div>
         <button class="btn" id="createCharBtn" disabled>⚔️ Continuar</button>
         <button class="btn" id="backToHubBtn" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);margin-top:0.5rem">← Volver</button>
@@ -1244,8 +1370,10 @@ function renderChatScreen() {
             <button class="modal-btn" id="logoutBtn">🚪 Cerrar Sesión</button>
             <button class="modal-btn danger" id="closeMenuBtn">✕ Cerrar</button>
         </div></div>
-        <div id="inventoryModal" class="modal hidden"><div class="modal-box">
+        <div id="inventoryModal" class="modal hidden"><div class="modal-box" style="max-width:520px">
             <div class="modal-title">🎒 Inventario</div>
+            <div class="equipped-slots" id="equippedSlots"></div>
+            <div style="margin:0.5rem 0;font-size:0.75rem;color:var(--text-muted);font-family:'Cinzel',serif;letter-spacing:0.05em">MOCHILA</div>
             <div id="inventoryList" class="inv-list"></div>
             <button class="modal-btn" id="closeInvBtn" style="margin-top:0.5rem">✓ Cerrar</button>
         </div></div>
@@ -1567,13 +1695,37 @@ function bindCharacterCreation() {
         statsDisplay.textContent = Object.entries(stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `${ab} ${v} (${m>=0?'+':''}${m})`;}).join(' · ');
         checkValidity();
     });
-    [nameInput,raceSelect,classSelect,bgSelect].forEach(el=>el.addEventListener('input',checkValidity));
+    // Auto-fill outfit when class is selected
+    classSelect.addEventListener('change', () => {
+        const cls = classSelect.value;
+        const defaults = CLASS_DEFAULT_OUTFIT[cls];
+        if (defaults) {
+            const ropa = document.getElementById('outfitRopa');
+            const arma = document.getElementById('outfitArma');
+            const offhand = document.getElementById('outfitOffhand');
+            const accesorio = document.getElementById('outfitAccesorio');
+            if (ropa && !ropa.value) ropa.value = defaults.ropa;
+            if (arma && !arma.value) arma.value = defaults.arma;
+            if (offhand && !offhand.value) offhand.value = defaults.offhand;
+            if (accesorio && !accesorio.value) accesorio.value = defaults.accesorio;
+        }
+        checkValidity();
+    });
+    [nameInput,raceSelect,bgSelect].forEach(el=>el.addEventListener('input',checkValidity));
     document.getElementById('backToHubBtn').addEventListener('click', () => showScreen('characterHub'));
     createBtn.addEventListener('click', () => {
         const id = generateId();
         const conMod = Math.floor((state.tempStats.CON-10)/2);
+        const cls = classSelect.value;
+        const defaultOutfit = CLASS_DEFAULT_OUTFIT[cls] || { ropa:'', arma:'', offhand:'', accesorio:'' };
+        const equipped = {
+            ropa:      document.getElementById('outfitRopa')?.value.trim()      || defaultOutfit.ropa,
+            arma:      document.getElementById('outfitArma')?.value.trim()      || defaultOutfit.arma,
+            offhand:   document.getElementById('outfitOffhand')?.value.trim()   || defaultOutfit.offhand,
+            accesorio: document.getElementById('outfitAccesorio')?.value.trim() || defaultOutfit.accesorio
+        };
         const char = {
-            id, name: nameInput.value.trim(), race: raceSelect.value, classe: classSelect.value,
+            id, name: nameInput.value.trim(), race: raceSelect.value, classe: cls,
             background: bgSelect.value, motivation: document.getElementById('charMotivation').value.trim(),
             gender: document.getElementById('charGender').value,
             appearance: document.getElementById('charAppearance').value.trim(),
@@ -1586,7 +1738,7 @@ function bindCharacterCreation() {
         setActiveCharId(id);
         state.character = char;
         const startingKnowledge = CLASS_STARTING_KNOWLEDGE[char.classe] || { knowledges:[], learnedAbilities:[] };
-        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], knowledges: startingKnowledge.knowledges.map(k=>({...k})), learnedAbilities: startingKnowledge.learnedAbilities.map(a=>({...a})), skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'' };
+        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], knowledges: startingKnowledge.knowledges.map(k=>({...k})), learnedAbilities: startingKnowledge.learnedAbilities.map(a=>({...a})), skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'', equipped };
         Object.assign(state.gameState, gs);
         state.chatHistory = [];
         state.adventure = null;
@@ -1930,33 +2082,92 @@ function openInventoryModal() {
 }
 function renderInventoryModal() {
     const list = document.getElementById('inventoryList');
+    const slotsEl = document.getElementById('equippedSlots');
+
+    // Render equipped slots panel
+    if (slotsEl) {
+        const eq = state.gameState.equipped || {};
+        const slotDefs = [
+            { key:'ropa',      icon:'👘', label:'Ropa' },
+            { key:'arma',      icon:'⚔️', label:'Arma' },
+            { key:'offhand',   icon:'🛡️', label:'Mano 2' },
+            { key:'accesorio', icon:'💍', label:'Accesorio' }
+        ];
+        slotsEl.innerHTML = `
+            <div style="font-size:0.75rem;color:var(--text-muted);font-family:'Cinzel',serif;letter-spacing:0.05em;margin-bottom:0.4rem">EQUIPADO ACTUALMENTE</div>
+            <div class="equipped-grid">
+                ${slotDefs.map(s => `
+                    <div class="equipped-slot">
+                        <span class="slot-icon">${s.icon}</span>
+                        <div class="slot-info">
+                            <div class="slot-label">${s.label}</div>
+                            <div class="slot-value">${eq[s.key] || '<em style="color:var(--text-muted)">vacío</em>'}</div>
+                        </div>
+                        ${eq[s.key] ? `<button class="slot-unequip" onclick="unequipSlot('${s.key}')">✕</button>` : ''}
+                    </div>`).join('')}
+            </div>`;
+    }
+
     if (!list) return;
     list.innerHTML = state.gameState.inventory.length === 0
-        ? '<div class="inv-empty">El inventario está vacío</div>'
+        ? '<div class="inv-empty">La mochila está vacía</div>'
         : state.gameState.inventory.map((item,i) => {
             const itemName = typeof item === 'string' ? item : item.name;
             const itemType = typeof item === 'string' ? 'objeto' : (item.type || 'objeto');
             const itemRarity = typeof item === 'string' ? 'común' : (item.rarity || 'común');
             const itemDamage = typeof item === 'string' ? null : item.damage;
 
+            // Determine which slot this item can equip to
+            let equipSlot = null;
+            if (itemType === 'arma') equipSlot = 'arma';
+            else if (itemType === 'armadura') equipSlot = 'ropa';
+            else if (['amuleto','anillo','componente'].includes(itemType) || itemName.toLowerCase().includes('amuleto') || itemName.toLowerCase().includes('collar') || itemName.toLowerCase().includes('anillo')) equipSlot = 'accesorio';
+
             let badge = '';
-            if (itemType === 'arma' && itemDamage !== null) {
-                badge = `<span class="item-badge">Daño: ${itemDamage}</span>`;
-            } else if (itemType === 'armadura') {
-                badge = `<span class="item-badge">Armadura</span>`;
-            } else if (itemType === 'consumible') {
-                badge = `<span class="item-badge">Consumible</span>`;
-            } else if (itemType === 'tesoro') {
-                badge = `<span class="item-badge">Tesoro</span>`;
-            }
+            if (itemType === 'arma' && itemDamage !== null) badge = `<span class="item-badge">d${itemDamage}</span>`;
+            else if (itemType === 'armadura') badge = `<span class="item-badge">Armadura</span>`;
+            else if (itemType === 'consumible') badge = `<span class="item-badge">Consumible</span>`;
+            else if (itemType === 'tesoro') badge = `<span class="item-badge">Tesoro</span>`;
+
+            const equipBtn = equipSlot
+                ? `<button class="inv-equip" onclick="equipItem(${i},'${equipSlot}')" title="Equipar en ${equipSlot}">↑ Equipar</button>`
+                : '';
 
             return `<div class="inv-item">
                 <span>${itemName}</span>
-                ${badge ? `<span class="item-info">${itemType} (${itemRarity}) ${badge}</span>` : `<span class="item-info">${itemType} (${itemRarity})</span>`}
-                <button class="inv-remove" onclick="removeItem(${i})">✕</button>
+                <span class="item-info">${itemType} (${itemRarity}) ${badge}</span>
+                <div style="display:flex;gap:0.3rem;align-items:center">
+                    ${equipBtn}
+                    <button class="inv-remove" onclick="removeItem(${i})">✕</button>
+                </div>
             </div>`;
         }).join('');
 }
+
+window.equipItem = function(idx, slot) {
+    const item = state.gameState.inventory[idx];
+    if (!item) return;
+    const itemName = typeof item === 'string' ? item : item.name;
+    if (!state.gameState.equipped) state.gameState.equipped = {};
+    // If something was already in that slot, keep it (don't auto-add back to inventory to avoid clutter)
+    state.gameState.equipped[slot] = itemName;
+    // Remove from inventory
+    state.gameState.inventory.splice(idx, 1);
+    renderInventoryModal(); updateStatus();
+    saveGameStateFor(state.activeCharId, state.gameState);
+};
+
+window.unequipSlot = function(slot) {
+    if (!state.gameState.equipped) return;
+    const val = state.gameState.equipped[slot];
+    if (!val) return;
+    state.gameState.equipped[slot] = '';
+    // Add back to inventory as an item object
+    state.gameState.inventory.push(createItemFromName(val));
+    renderInventoryModal(); updateStatus();
+    saveGameStateFor(state.activeCharId, state.gameState);
+};
+
 window.removeItem = function(idx) {
     state.gameState.inventory.splice(idx,1); renderInventoryModal(); updateStatus();
     saveGameStateFor(state.activeCharId, state.gameState);
@@ -2134,6 +2345,13 @@ function createMessageEl(msg, idx) {
         } else if (msg.roll) {
             const modDisplay = msg.roll.mod >= 0 ? `+${msg.roll.mod}` : `${msg.roll.mod}`;
             rollHtml = `<div class="roll-badge ${msg.roll.success?'success':'failure'}">${msg.roll.skill} d20=${msg.roll.roll}${modDisplay}=${msg.roll.total} ${msg.roll.success?'Éxito':'Fallo'}</div>`;
+            // Show NPC opposed roll if present
+            if (msg.npcRoll) {
+                const npcModDisplay = msg.npcRoll.mod >= 0 ? `+${msg.npcRoll.mod}` : `${msg.npcRoll.mod}`;
+                const npcClass = msg.npcRoll.playerWins ? 'npc-roll-lost' : 'npc-roll-won';
+                const outcome = msg.npcRoll.playerWins ? '🗡️ Engaño logrado' : '👁️ NPC sospecha';
+                rollHtml += `<div class="roll-badge npc-opposed ${npcClass}">NPC ${msg.npcRoll.skill} d20=${msg.npcRoll.roll}${npcModDisplay}=${msg.npcRoll.total} · ${outcome}</div>`;
+            }
         }
         wrap.innerHTML = `<div class="player-action">${msg.content}</div>${rollHtml}`;
     }
@@ -2515,6 +2733,22 @@ function buildPrompt(playerAction, rollResult) {
         }
     }
 
+    // Appearance section — what NPCs actually see when they look at the character
+    const raceAppearance = RACE_APPEARANCE[char.race] || `Rasgos de ${char.race}.`;
+    const equipped = state.gameState.equipped || {};
+    const equippedParts = [
+        equipped.ropa      ? `Viste: ${equipped.ropa}` : null,
+        equipped.arma      ? `Lleva (mano derecha): ${equipped.arma}` : null,
+        equipped.offhand   ? `Lleva (mano izquierda / espalda): ${equipped.offhand}` : null,
+        equipped.accesorio ? `Accesorio visible: ${equipped.accesorio}` : null
+    ].filter(Boolean);
+    const charPhysical = char.appearance ? `Rasgos físicos personales: ${char.appearance}.` : '';
+    const appearanceSection = `\nAPARIENCIA VISIBLE DEL PERSONAJE (lo que cualquier NPC ve al mirarle):
+- Raza: ${char.race} — ${raceAppearance}
+${charPhysical ? '- ' + charPhysical : ''}
+${equippedParts.length ? equippedParts.map(p=>'- '+p).join('\n') : '- Sin equipo especial visible.'}
+REGLA: usa esta información cuando evalúes la plausibilidad de mentiras sociales, disfraces o impostura. Un elfo SIN alas ni aura mágica que afirma ser hada de verdad genera desconfianza automática. Alguien con armadura y armas visibles no parece emisario diplomático.`;
+
     const worldEvents = getEventsForLocation(state.gameState.location);
     const worldSection = worldEvents.length > 0 ? `\nHISTORIA DEL MUNDO EN ESTA ZONA:\n${worldEvents.map(e=>`- ${e.event}`).join('\n')}` : '';
     const companions = (state.gameState.companions||[]).map(c=>`- ${c.name} (${c.role||'aliado'}, PV ${c.hp}/${c.maxHp})`).join('\n')||'ninguno';
@@ -2562,10 +2796,13 @@ ESTADO ACTUAL:
 - Contexto: ${state.gameState.summary||'inicio'}
 - Compañeros: ${companions}
 - Relaciones: ${rels}${npcSection}
+${appearanceSection}
 ${worldSection}${rollSection}
 ${classRulesSection}
 INSTRUCCIONES:
 - **REGLA DE OBLIGATORIO CUMPLIMIENTO**: Cuando veas "[ACTION SELECCIONADA] X" en el prompt del usuario, debes interpretar "X" como la acción que el personaje ha seleccionado realizar. Describe las consecuencias de esa acción sin repetir literalmente "X". Muestra lo que sucede como resultado de esa elección.
+- **TIRADAS OPUESTAS — OBLIGATORIO**: Cuando recibes un bloque [RESULTADO OPUESTO: ...], debes narrar respetando quién ganó. Si el NPC gana, el NPC sospecha, hace preguntas difíciles, o descubre el engaño — proporcional a la diferencia de puntos. No ignores nunca el resultado de la tirada del NPC.
+- **PLAUSIBILIDAD DE MENTIRAS**: Aunque no haya tirada, si el jugador afirma algo muy inverosímil dado quién es (su raza, apariencia obvia, falta de pruebas) el NPC debería expresar dudas o pedir evidencia. Una hada de verdad tendría alas o aura mágica. Un enviado real llevaría documentos sellados. Los NPCs no son ingenuos.
 - **CONSISTENCIA NARRATIVA — NUNCA ROMPER**: Los nombres de personajes, NPCs y lugares ya establecidos en la conversación NO cambian. Si Gorin fue presentado como soldado, sigue siendo soldado. Si el lord se llama Harrington, sigue llamándose Harrington. Si el jugador está en el castillo por una razón específica, esa razón no cambia ni se olvida.
 - **CONTINUIDAD DE ESCENA**: Si el jugador acaba de seguir a alguien o entrar a un lugar, la siguiente respuesta ocurre en ese lugar con esos personajes. No introduzcas personajes nuevos sin lógica narrativa.
 - **MOTIVO DEL JUGADOR**: El resumen y el contexto indican por qué el jugador está en un lugar. Mantenlo siempre presente en la narración.

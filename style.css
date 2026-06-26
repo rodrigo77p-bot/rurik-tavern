@@ -101,9 +101,12 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
 .roll-dc { color:var(--text-muted); }
 .roll-btn { background:var(--accent); color:var(--bg-dark); border:none; padding:0.2rem 0.6rem; border-radius:14px; font-family:'Cinzel',serif; font-size:0.7rem; font-weight:700; cursor:pointer; }
 .roll-btn:hover { background:#e6c32e; }
-.roll-badge { font-family:'Cinzel',serif; font-size:0.68rem; letter-spacing:0.04em; padding:0.2rem 0.65rem; border-radius:20px; display:inline-flex; align-items:center; }
+.roll-badge { font-family:'Cinzel',serif; font-size:0.68rem; letter-spacing:0.04em; padding:0.2rem 0.65rem; border-radius:20px; display:inline-flex; align-items:center; margin-top:0.2rem; }
 .roll-badge.success { background:var(--success); color:#c8f0d8; }
 .roll-badge.failure { background:var(--failure); color:#f0c8c8; }
+.roll-badge.npc-opposed { display:block; margin-top:0.25rem; font-size:0.65rem; opacity:0.9; }
+.roll-badge.npc-roll-lost { background:rgba(40,70,40,0.6); color:#a8d8a8; border:1px solid rgba(80,140,80,0.3); }
+.roll-badge.npc-roll-won { background:rgba(90,30,30,0.6); color:#e8a0a0; border:1px solid rgba(160,60,60,0.4); }
 
 /* ---- INPUT ---- */
 .input-area { display:flex; gap:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border); flex-shrink:0; }
@@ -111,6 +114,8 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
 .input-area input[type="text"]:focus { outline:none; border-color:var(--accent); }
 .input-area .btn { width:auto; margin-top:0; padding:0.65rem 1.1rem; flex-shrink:0; border-radius:8px; font-size:0.88rem; }
 .footer-note { text-align:center; font-size:0.67rem; color:var(--text-muted); font-family:'Cinzel',serif; padding-top:0.3rem; flex-shrink:0; }
+.memory-bar { text-align:center; font-size:0.67rem; font-family:'Cinzel',serif; padding:0.25rem 0.5rem; flex-shrink:0; opacity:0.8; transition:opacity 0.2s; }
+.memory-bar:hover { opacity:1; }
 .typing-indicator { align-self:flex-start; flex-shrink:0; width:100%; background:var(--bg-darker); border:1px solid var(--border); border-radius:8px; padding:0.65rem 1rem; color:var(--text-muted); font-style:italic; font-size:0.88rem; animation:pulse 1.5s infinite; }
 @keyframes pulse { 0%,100% { opacity:0.5; } 50% { opacity:1; } }
 
@@ -149,8 +154,20 @@ h1,h2,h3 { font-family:'Cinzel',serif; color:var(--accent); margin-bottom:1rem; 
 .modal-btn.danger { color:#e05555; border-color:#5a2222; }
 .modal-btn.danger:hover { border-color:#e05555; background:rgba(200,50,50,0.1); }
 .modal-btn.small { width:auto; padding:0.4rem 0.75rem; flex-shrink:0; }
-.inv-list { display:flex; flex-direction:column; gap:0.3rem; max-height:200px; overflow-y:auto; margin-bottom:0.5rem; }
-.inv-item { display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:5px; padding:0.35rem 0.6rem; font-size:0.88rem; }
+/* ---- EQUIPPED SLOTS ---- */
+.equipped-grid { display:grid; gap:0.3rem; margin-bottom:0.75rem; }
+.equipped-slot { display:flex; align-items:center; gap:0.5rem; background:rgba(201,168,76,0.06); border:1px solid rgba(201,168,76,0.2); border-radius:6px; padding:0.35rem 0.6rem; }
+.slot-icon { font-size:1rem; flex-shrink:0; }
+.slot-info { flex:1; min-width:0; }
+.slot-label { font-size:0.65rem; color:var(--text-muted); font-family:'Cinzel',serif; letter-spacing:0.05em; text-transform:uppercase; }
+.slot-value { font-size:0.82rem; color:var(--text-light); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.slot-unequip { background:none; border:none; color:#a05555; cursor:pointer; font-size:0.7rem; flex-shrink:0; }
+.slot-unequip:hover { color:#e05555; }
+.inv-equip { background:rgba(201,168,76,0.15); border:1px solid rgba(201,168,76,0.3); color:var(--accent); cursor:pointer; font-size:0.68rem; padding:0.1rem 0.4rem; border-radius:3px; font-family:'Cinzel',serif; white-space:nowrap; }
+.inv-equip:hover { background:rgba(201,168,76,0.25); }
+/* ---- INVENTORY ---- */
+.inv-list { display:flex; flex-direction:column; gap:0.3rem; max-height:180px; overflow-y:auto; margin-bottom:0.5rem; }
+.inv-item { display:flex; justify-content:space-between; align-items:center; gap:0.4rem; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:5px; padding:0.35rem 0.6rem; font-size:0.88rem; }
 .inv-remove { background:none; border:none; color:#a05555; cursor:pointer; font-size:0.75rem; padding:0 0.2rem; }
 .inv-remove:hover { color:#e05555; }
 .inv-empty { text-align:center; color:var(--text-muted); font-size:0.85rem; padding:0.75rem; }
