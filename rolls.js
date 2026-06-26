@@ -667,17 +667,18 @@ function addExperience(amount) {
     saveGameStateFor(state.activeCharId, state.gameState);
 }
 
-window.useAction = async function(text) {
-    const playerInput = document.getElementById('playerInput');
-    const sendBtn = document.getElementById('sendBtn');
-    if (!playerInput || !sendBtn) return;
-    // Action chips go straight to the AI — no client-side pre-roll guess.
-    // If a roll is needed the AI will request it via [ROLL:] in its response.
+window.useAction = function(text) {
+    var input = document.getElementById('playerInput');
+    if (!input) { console.error('useAction: playerInput not found'); return; }
     state.pendingRoll = null;
-    playerInput.value = '';
-    playerInput.disabled = true;
-    sendBtn.disabled = true;
-    sendBtn.textContent = '...';
-    addPlayerMessage(text, null, 'done', state.chatHistory.length);
-    await callAndRespond(text, null);
+    state.skipPreRoll = true;   // bypass guessRequiredRoll in sendMessage
+    input.value = text;
+    if (typeof window._sendMessage === 'function') {
+        window._sendMessage();
+    } else {
+        // fallback: click the button
+        var btn = document.getElementById('sendBtn');
+        if (btn) btn.click();
+        else console.error('useAction: _sendMessage not available and sendBtn not found');
+    }
 };

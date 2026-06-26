@@ -1017,6 +1017,9 @@ function bindChat() {
         await callAndRespond(action, null);
     }
 
+    // Expose sendMessage globally so useAction can call it directly
+    window._sendMessage = sendMessage;
+
     // Use touchend on mobile for instant response, click as fallback
     let touchFired = false;
     sendBtn.addEventListener('touchend', e => {
