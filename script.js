@@ -128,7 +128,6 @@ async function fsDeleteCharacter(id) {
 }
 
 // ===== MODULE LOADER =====
-// Loads satellite JS files in order before calling init.
 (function loadModules() {
     var modules = ['constants.js', 'rolls.js', 'npc.js', 'ai.js', 'ui.js'];
     var idx = 0;
@@ -162,11 +161,12 @@ const state = {
     },
     chatHistory: [],
     turnCount: 0,
-    pendingRoll: null
+    pendingRoll: null,
+    skipPreRoll: false   // set by useAction to bypass client-side roll detection
 };
 
 // Debug configuration
-const DEBUG_IA_COMMUNICATION = false; // Set to true to enable debug logging
+const DEBUG_IA_COMMUNICATION = false;
 
 const appDiv = document.getElementById('app');
 
@@ -994,7 +994,9 @@ function bindChat() {
         state.pendingRoll = null; // clear any stale roll
 
         // Check if action requires a roll BEFORE sending to AI
-        const suggestedRoll = guessRequiredRoll(action);
+        // (skipped for action-chip clicks — AI requests roll via [ROLL:])
+        const suggestedRoll = state.skipPreRoll ? null : guessRequiredRoll(action);
+        state.skipPreRoll = false; // reset flag
         if (suggestedRoll) {
             // We know a roll is needed, so set up pending roll immediately
             const statVal = state.character?.stats[suggestedRoll.stat] || 10;
