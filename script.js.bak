@@ -1,0 +1,3202 @@
+// ===== iOS SCROLL/ZOOM FIX =====
+(function(){
+    // Prevent iOS from zooming on input focus by ensuring viewport is correct
+    const vp = document.querySelector('meta[name="viewport"]');
+    if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
+    // Disable scroll restoration so reload doesn't jump
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+})();
+
+// ===================== CONSTANTS =====================
+
+// ===================== FIREBASE =====================
+let fbApp = null, fbDb = null, fbAuth = null, fbUser = null;
+
+async function loadFirebaseSDK() {
+    if (typeof firebase !== 'undefined') return;
+    const urls = [
+        'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js',
+        'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
+        'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js'
+    ];
+    for (const url of urls) {
+        await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = url; s.onload = resolve; s.onerror = reject;
+            document.head.appendChild(s);
+        });
+    }
+}
+
+function initFirebase(config) {
+    if (fbApp) return;
+    fbApp = firebase.initializeApp(config);
+    fbAuth = firebase.auth();
+    fbDb = firebase.firestore();
+}
+
+async function syncFromFirestore() {
+    if (!fbDb || !fbUser) return;
+    const uid = fbUser.uid;
+    try {
+        const dataDoc = await fbDb.doc(`users/${uid}/data/main`).get();
+        if (dataDoc.exists) {
+            const d = dataDoc.data();
+            // Merge: combine Firestore chars + local chars, avoiding duplicates by id
+            const fsChars = d.characters || [];
+            const localChars = getAllCharacters();
+            if (fsChars.length > 0) {
+                const merged = [...fsChars];
+                for (const lc of localChars) {
+                    if (!merged.find(c => c.id === lc.id)) merged.push(lc);
+                }
+                localStorage.setItem('dndCharacters', JSON.stringify(merged));
+            }
+            if (d.worldState) {
+                // Merge world events too
+                const fsWs = d.worldState;
+                const localWs = getWorldState();
+                const allEvents = [...(fsWs.events||[])];
+                for (const ev of (localWs.events||[])) {
+                    if (!allEvents.find(e => e.id === ev.id)) allEvents.push(ev);
+                }
+                localStorage.setItem('dndWorldState', JSON.stringify({ events: allEvents }));
+            }
+        } else {
+            // Firestore empty — push all local data up
+            const localChars = getAllCharacters();
+            if (localChars.length > 0) {
+                await fbDb.doc(`users/${uid}/data/main`).set({
+                    characters: localChars,
+                    worldState: getWorldState(),
+                    updatedAt: new Date().toISOString()
+                });
+                // Push each character's game data
+                for (const char of localChars) {
+                    const gs = getGameState(char.id);
+                    if (gs) await fbDb.doc(`users/${uid}/gameStates/${char.id}`).set(gs);
+                    const adv = getAdventure(char.id);
+                    if (adv) await fbDb.doc(`users/${uid}/adventures/${char.id}`).set(adv);
+                    const ch = getChatHistory(char.id);
+                    if (ch.length) await fbDb.doc(`users/${uid}/chatHistory/${char.id}`).set({ messages: ch });
+                }
+            }
+        }
+        // Pull per-character data from Firestore
+        const chars = getAllCharacters();
+        for (const char of chars) {
+            const gsDoc = await fbDb.doc(`users/${uid}/gameStates/${char.id}`).get();
+            if (gsDoc.exists) localStorage.setItem('dndGameState_' + char.id, JSON.stringify(gsDoc.data()));
+            const advDoc = await fbDb.doc(`users/${uid}/adventures/${char.id}`).get();
+            if (advDoc.exists) localStorage.setItem('dndAdventure_' + char.id, JSON.stringify(advDoc.data()));
+            const chDoc = await fbDb.doc(`users/${uid}/chatHistory/${char.id}`).get();
+            if (chDoc.exists && chDoc.data().messages) localStorage.setItem('dndChatHistory_' + char.id, JSON.stringify(chDoc.data().messages));
+        }
+    } catch(e) { console.error('Firestore sync error:', e); }
+}
+
+async function fsSaveMain() {
+    if (!fbDb || !fbUser) return;
+    try {
+        await fbDb.doc(`users/${fbUser.uid}/data/main`).set({
+            characters: getAllCharacters(),
+            worldState: getWorldState(),
+            updatedAt: new Date().toISOString()
+        });
+    } catch(e) { console.error('FS save error:', e); }
+}
+async function fsSaveGameState(id, gs) {
+    if (!fbDb || !fbUser) return;
+    try { await fbDb.doc(`users/${fbUser.uid}/gameStates/${id}`).set(gs); } catch(e) {}
+}
+async function fsSaveChatHistory(id, ch) {
+    if (!fbDb || !fbUser) return;
+    try { await fbDb.doc(`users/${fbUser.uid}/chatHistory/${id}`).set({ messages: ch }); } catch(e) {}
+}
+async function fsSaveAdventure(id, adv) {
+    if (!fbDb || !fbUser) return;
+    try { await fbDb.doc(`users/${fbUser.uid}/adventures/${id}`).set(adv); } catch(e) {}
+}
+async function fsDeleteCharacter(id) {
+    if (!fbDb || !fbUser) return;
+    const uid = fbUser.uid;
+    try {
+        await fbDb.doc(`users/${uid}/gameStates/${id}`).delete();
+        await fbDb.doc(`users/${uid}/chatHistory/${id}`).delete();
+        await fbDb.doc(`users/${uid}/adventures/${id}`).delete();
+    } catch(e) {}
+}
+
+const ADVENTURES = [
+    { id:'tavern-mystery', title:'El Misterio de la Taberna', emoji:'🕵️', gradient:'linear-gradient(135deg,#1a0a0a,#3d1a0a)', tags:['Misterio','Intriga'], description:'Clientes desaparecen en la Taberna de Rurik. Alguien entre los habituales oculta un secreto mortal.', startScene:'La taberna de Rurik está inusualmente silenciosa esta noche. Tres mesas vacías que siempre tienen clientes, la cocinera evita tu mirada, y el tabernero Grimbold limpia el mismo vaso desde hace veinte minutos. En el rincón del fondo, una silla volcada que nadie ha levantado desde ayer.', location:'Taberna de Rurik' },
+    { id:'dungeon-king', title:'Las Catacumbas del Rey Olvidado', emoji:'💀', gradient:'linear-gradient(135deg,#0a0a1a,#1a0a3d)', tags:['Dungeon','Exploración'], description:'Bajo el castillo en ruinas yacen tesoros y horrores. Las trampas del rey muerto llevan mil años esperando.', startScene:'La entrada a las catacumbas es una grieta en la roca, apenas lo bastante ancha para entrar de lado. El aire que sale huele a piedra húmeda y algo antiguo. Tu antorcha proyecta sombras que parecen moverse antes de que la llama las alcance. La leyenda dice que el último explorador que entró dejó sus botas en la entrada. Las botas siguen aquí.', location:'Catacumbas del Rey Olvidado' },
+    { id:'city-intrigue', title:'Trono de Cenizas', emoji:'👑', gradient:'linear-gradient(135deg,#0a0f0a,#1a3d10)', tags:['Política','Guerra'], description:'El gobernador ha sido asesinado y tres facciones se culpan. Tú conoces la verdad, pero ¿puedes sobrevivir para contarla?', startScene:'La ciudad de Piedranegra amanece con el cuerpo del gobernador colgado en la plaza. Tres facciones ya se acusan mutuamente. Tú viste quién salió de sus aposentos anoche. Nadie más lo sabe todavía.', location:'Ciudad de Piedranegra' },
+    { id:'forest-spirits', title:'El Bosque que Sangra', emoji:'🌲', gradient:'linear-gradient(135deg,#0a0f08,#0f2d0a)', tags:['Naturaleza','Horror'], description:'Los árboles del bosque antiguo gotean sangre al amanecer. Las aldeas del borde llevan semanas sin noticias.', startScene:'El bosque de Mirenveil siempre fue extraño, pero ahora es otra cosa. Los árboles más viejos tienen líneas rojas que recorren su corteza como venas. Los pájaros no cantan. Hace tres semanas, la aldea de Millhaven dejó de responder a los mensajeros.', location:'Bosque de Mirenveil' },
+    { id:'sea-port', title:'Puerto de Contrabandistas', emoji:'⚓', gradient:'linear-gradient(135deg,#050a1a,#0a1a3d)', tags:['Piratería','Mar'], description:'En el puerto más corrupto del mundo, todos tienen secretos. Un cargamento misterioso está a punto de desencadenar una guerra.', startScene:'El Puerto de las Lanzas huele a sal, pescado y traición. Esta mañana apareció un barco en la bahía sin tripulación, sin bandera, y con las escotillas selladas desde dentro. El Capitán Vorra ha ofrecido doscientas monedas a quien descubra qué lleva el barco.', location:'Puerto de las Lanzas' },
+    { id:'free', title:'Aventura Libre', emoji:'✨', gradient:'linear-gradient(135deg,#1a100a,#3d2a0a)', tags:['Libre','Abierto'], description:'Sin guión. El Maestro de Mazmorras crea el mundo contigo en tiempo real.', startScene:null, location:'Taberna de Rurik' }
+];
+
+const CLASS_ICONS = { 'Guerrero':'⚔️','Mago':'🔮','Pícaro':'🗡️','Clérigo':'✦','Bardo':'🎭','Druida':'🌿','Explorador':'🏹','Paladín':'🛡️','Hechicero':'⚡','Monje':'👊' };
+
+const CLASS_ABILITIES = {
+    'Guerrero':   { can: ['combate cuerpo a cuerpo','uso de armas y armaduras','tácticas militares','resistencia física','intimidación por fuerza'], cannot: ['magia arcana','hechizos','necromancia','invocar o animar muertos','curación mágica','rituales arcanos o divinos','conjuros de cualquier tipo'] },
+    'Mago':       { can: ['magia arcana','hechizos y conjuros','rituales arcanos','identificar objetos mágicos','leer pergaminos mágicos'], cannot: ['magia divina','curación sagrada','transformación animal','ki ni artes marciales','armaduras pesadas'] },
+    'Pícaro':     { can: ['sigilo','robo y pickpocketing','venenos','trampas','engaño','acrobacias','ataques furtivos'], cannot: ['magia arcana','hechizos','necromancia','curación mágica','combate frontal con armadura pesada'] },
+    'Clérigo':    { can: ['magia divina','curación mágica','rituales sagrados','expulsar muertos vivientes','bendiciones'], cannot: ['magia arcana','necromancia oscura','conjuros arcanos','venenos'] },
+    'Bardo':      { can: ['magia arcana menor','música mágica','encantamientos','ilusiones menores','persuasión sobrenatural','conocimiento amplio'], cannot: ['necromancia','hechizos destructivos de alto nivel','armaduras pesadas','combate físico avanzado'] },
+    'Druida':     { can: ['magia natural','transformación en animales','curación natural','rituales de naturaleza','control del clima menor'], cannot: ['magia arcana','necromancia','armaduras de metal','conjuros de fuego o destrucción masiva'] },
+    'Explorador': { can: ['rastreo','arco y armas a distancia','supervivencia en naturaleza','magia menor de naturaleza','emboscadas'], cannot: ['magia arcana avanzada','necromancia','curación mágica','armaduras pesadas'] },
+    'Paladín':    { can: ['combate sagrado','curación divina menor','auras de protección','detectar el mal','smite divino'], cannot: ['magia arcana','necromancia','magia oscura o corrupta','venenos'] },
+    'Hechicero':  { can: ['magia arcana innata','hechizos de sangre','metamagia','conjuros instintivos'], cannot: ['magia divina','rituales arcanos complejos','curación sagrada','combate físico pesado'] },
+    'Monje':      { can: ['ki y artes marciales','velocidad sobrehumana','golpes desarmados letales','resistencia mental','deflexión de proyectiles'], cannot: ['magia arcana','necromancia','hechizos','armaduras'] }
+};
+// ===================== CHARACTER KNOWLEDGE SYSTEM =====================
+// Each entry: { id, name, type, level (1=básico,2=intermedio,3=avanzado), description }
+// learnedAbilities: { id, name, category, stat, dcBonus, description }
+const CLASS_STARTING_KNOWLEDGE = {
+    'Guerrero': {
+        knowledges: [
+            { id:'weapon_mastery',    name:'Maestría con Armas',       type:'skill',  level:2, description:'Manejo experto de espadas, hachas y lanzas.' },
+            { id:'armor_use',         name:'Uso de Armaduras',          type:'skill',  level:2, description:'Combate con armadura sin penalización.' },
+            { id:'military_tactics',  name:'Tácticas Militares',        type:'skill',  level:1, description:'Formaciones, emboscadas y estrategia básica.' },
+        ],
+        learnedAbilities: [
+            { id:'power_attack',  name:'Ataque Poderoso',  category:'combat', stat:'FUE', dcBonus:0,  description:'Golpe lento pero devastador.' },
+            { id:'second_wind',   name:'Segundo Aliento',  category:'combat', stat:'CON', dcBonus:0,  description:'Recuperar HP en combate una vez por encuentro.' },
+        ]
+    },
+    'Mago': {
+        knowledges: [
+            { id:'arcane_theory',   name:'Teoría Arcana',        type:'magic',    level:2, description:'Fundamentos de la magia arcana y sus escuelas.' },
+            { id:'spellbook_read',  name:'Lectura de Grimorios', type:'skill',    level:2, description:'Leer, copiar y descifrar hechizos escritos.' },
+            { id:'arcane_lore',     name:'Lore Arcano',          type:'lore',     level:1, description:'Historia de la magia y seres sobrenaturales.' },
+        ],
+        learnedAbilities: [
+            { id:'magic_missile',  name:'Dardo de Magia',    category:'spell', stat:'INT', dcBonus:0,  description:'Proyectil de energía arcana infalible.' },
+            { id:'detect_magic',   name:'Detectar Magia',    category:'spell', stat:'INT', dcBonus:0,  description:'Percibir auras mágicas cercanas.' },
+            { id:'arcane_shield',  name:'Escudo Arcano',     category:'spell', stat:'INT', dcBonus:2,  description:'Barrera mágica instantánea.' },
+        ]
+    },
+    'Pícaro': {
+        knowledges: [
+            { id:'stealth_arts',    name:'Arte del Sigilo',       type:'skill',  level:2, description:'Moverse sin ser visto ni oído.' },
+            { id:'lockpicking',     name:'Ganzuería',             type:'skill',  level:2, description:'Abrir cerraduras y desactivar trampas.' },
+            { id:'street_lore',     name:'Conocimiento Callejero',type:'lore',   level:1, description:'Contactos, rutas de escape y mercado negro.' },
+            { id:'poison_basics',   name:'Venenos Básicos',       type:'craft',  level:1, description:'Identificar y aplicar venenos simples.' },
+        ],
+        learnedAbilities: [
+            { id:'sneak_attack',    name:'Ataque Furtivo',    category:'combat', stat:'DES', dcBonus:0,  description:'Daño extra al atacar desde las sombras.' },
+            { id:'pickpocket',      name:'Carterismo',        category:'skill',  stat:'DES', dcBonus:0,  description:'Robar objetos sin ser detectado.' },
+        ]
+    },
+    'Clérigo': {
+        knowledges: [
+            { id:'divine_lore',     name:'Lore Divino',           type:'lore',   level:2, description:'Historia sagrada, deidades y rituales.' },
+            { id:'healing_arts',    name:'Arte de la Curación',   type:'magic',  level:2, description:'Medicina mágica y mundana.' },
+            { id:'undead_lore',     name:'Lore de No-Muertos',    type:'lore',   level:1, description:'Naturaleza, debilidades y creación de no-muertos.' },
+        ],
+        learnedAbilities: [
+            { id:'heal',            name:'Curar Heridas',     category:'spell', stat:'SAB', dcBonus:0,  description:'Sanar HP con poder divino.' },
+            { id:'turn_undead',     name:'Expulsar No-Muertos',category:'spell',stat:'SAB', dcBonus:0,  description:'Repeler o destruir muertos vivientes.' },
+            { id:'bless',           name:'Bendición',         category:'spell', stat:'SAB', dcBonus:0,  description:'Bonificación divina a aliados.' },
+        ]
+    },
+    'Bardo': {
+        knowledges: [
+            { id:'arcane_basics',   name:'Magia Arcana Básica',   type:'magic',  level:1, description:'Hechizos menores y encantamientos.' },
+            { id:'world_lore',      name:'Conocimiento del Mundo',type:'lore',   level:2, description:'Historia, política, rumores y secretos.' },
+            { id:'performance',     name:'Artes Escénicas',       type:'skill',  level:2, description:'Música, teatro y oratoria.' },
+        ],
+        learnedAbilities: [
+            { id:'bardic_inspiration', name:'Inspiración Bárdica', category:'social', stat:'CAR', dcBonus:0, description:'Dar ventaja a un aliado con música o palabras.' },
+            { id:'charm_person',    name:'Encantar Persona',   category:'spell', stat:'CAR', dcBonus:0,  description:'Hacer a alguien temporalmente amigable.' },
+            { id:'vicious_mockery', name:'Insulto Procaz',     category:'spell', stat:'CAR', dcBonus:0,  description:'Magia psíquica a través del insulto.' },
+        ]
+    },
+    'Druida': {
+        knowledges: [
+            { id:'nature_magic',    name:'Magia Natural',         type:'magic',  level:2, description:'Hechizos de tierra, viento, agua y animales.' },
+            { id:'herbalism',       name:'Herboristería',         type:'craft',  level:2, description:'Pociones, venenos y remedios naturales.' },
+            { id:'beast_lore',      name:'Lore Animal',           type:'lore',   level:2, description:'Comportamiento, rastros y lenguaje animal.' },
+        ],
+        learnedAbilities: [
+            { id:'wild_shape',      name:'Forma Salvaje',     category:'spell', stat:'SAB', dcBonus:0,  description:'Transformarse en un animal conocido.' },
+            { id:'entangle',        name:'Enredar',           category:'spell', stat:'SAB', dcBonus:0,  description:'Raíces y plantas inmovilizan enemigos.' },
+            { id:'speak_animals',   name:'Hablar con Animales',category:'spell',stat:'SAB', dcBonus:0,  description:'Comunicación básica con bestias.' },
+        ]
+    },
+    'Explorador': {
+        knowledges: [
+            { id:'tracking',        name:'Rastreo',               type:'skill',  level:2, description:'Seguir rastros en cualquier terreno.' },
+            { id:'survival',        name:'Supervivencia',         type:'skill',  level:2, description:'Orientación, caza y refugio.' },
+            { id:'nature_basics',   name:'Magia Natural Básica',  type:'magic',  level:1, description:'Hechizos menores de naturaleza.' },
+            { id:'archery',         name:'Arquería',              type:'skill',  level:2, description:'Arco y armas a distancia.' },
+        ],
+        learnedAbilities: [
+            { id:'hunters_mark',    name:'Marca del Cazador', category:'spell', stat:'SAB', dcBonus:0,  description:'Marcar a una presa para rastrearla y hacerle más daño.' },
+            { id:'colossus_slayer', name:'Matar Colosos',     category:'combat',stat:'DES', dcBonus:0,  description:'Daño extra contra enemigos heridos.' },
+        ]
+    },
+    'Paladín': {
+        knowledges: [
+            { id:'divine_magic',    name:'Magia Divina',          type:'magic',  level:1, description:'Bendiciones, smites y auras sagradas.' },
+            { id:'combat_mastery',  name:'Maestría en Combate',   type:'skill',  level:2, description:'Combate con armadura pesada y armas sagradas.' },
+            { id:'religious_lore',  name:'Lore Religioso',        type:'lore',   level:2, description:'Órdenes, dioses, rituales y enemigos sagrados.' },
+        ],
+        learnedAbilities: [
+            { id:'divine_smite',    name:'Smite Divino',      category:'combat', stat:'FUE', dcBonus:0, description:'Canalizar energía divina en un golpe.' },
+            { id:'lay_on_hands',    name:'Imponer Manos',     category:'spell',  stat:'SAB', dcBonus:0, description:'Curación divina por contacto.' },
+            { id:'aura_protection', name:'Aura de Protección',category:'spell',  stat:'CAR', dcBonus:0, description:'Bonificación a tiradas de salvación cercanas.' },
+        ]
+    },
+    'Hechicero': {
+        knowledges: [
+            { id:'innate_magic',    name:'Magia Innata',          type:'magic',  level:2, description:'Control instintivo del poder arcano interior.' },
+            { id:'metamagic',       name:'Metamagia',             type:'magic',  level:1, description:'Modificar hechizos en tiempo real.' },
+        ],
+        learnedAbilities: [
+            { id:'chaos_bolt',      name:'Rayo del Caos',     category:'spell', stat:'INT', dcBonus:0,  description:'Proyectil arcano de energía aleatoria.' },
+            { id:'wild_magic',      name:'Magia Salvaje',     category:'spell', stat:'INT', dcBonus:0,  description:'Efectos mágicos impredecibles pero potentes.' },
+            { id:'subtle_spell',    name:'Hechizo Sutil',     category:'spell', stat:'INT', dcBonus:0,  description:'Lanzar hechizos sin gestos ni palabras visibles.' },
+        ]
+    },
+    'Monje': {
+        knowledges: [
+            { id:'ki_arts',         name:'Artes del Ki',          type:'skill',  level:2, description:'Control del flujo de energía interior.' },
+            { id:'martial_arts',    name:'Artes Marciales',       type:'skill',  level:2, description:'Combate desarmado y con armas de monje.' },
+            { id:'meditation',      name:'Meditación Avanzada',   type:'skill',  level:1, description:'Resistencia mental, concentración y percepción ampliada.' },
+        ],
+        learnedAbilities: [
+            { id:'flurry_blows',    name:'Torbellino de Golpes', category:'combat', stat:'DES', dcBonus:0, description:'Dos golpes extra al usar ki.' },
+            { id:'stunning_strike', name:'Golpe Aturdidor',      category:'combat', stat:'FUE', dcBonus:0, description:'Aturdir a un enemigo gastando ki.' },
+            { id:'deflect_missiles',name:'Deflectar Proyectiles',category:'combat', stat:'DES', dcBonus:0, description:'Reducir o devolver proyectiles.' },
+        ]
+    }
+};
+
+const STATUS_LABELS = { alive:'Vivo', dead:'Muerto', cursed:'Maldito' };
+
+// ===================== PORTRAIT GENERATION =====================
+const RACE_VISUALS = {
+    'Humano':'human',
+    'Elfo':'elf with pointed ears, ethereal beauty',
+    'Enano':'dwarf, stocky and sturdy',
+    'Mediano':'halfling, small and cheerful',
+    'Tiefling':'tiefling with small demon horns and glowing eyes',
+    'Vampiro':'vampire with pale skin, sharp fangs and dark eyes',
+    'Hada':'fairy with delicate pointed ears, ethereal iridescent skin, luminous glow, butterfly-like wings',
+    'Fauno':'faun with small horns and goat features',
+    'Dragonborn':'dragonborn with dragon scales and reptilian features',
+    'Orco':'orc with green skin, tusks and powerful build',
+    'Semiélfico':'half-elf with slightly pointed ears',
+    'Gnomo':'gnome with large curious eyes'
+};
+
+// Rasgos raciales visibles (para el prompt del DM — en español)
+const RACE_APPEARANCE = {
+    'Humano':    'Sin rasgos raciales llamativos. Parece un humano corriente.',
+    'Elfo':      'Orejas puntiagudas, rasgos etéreos y delicados, movimientos gráciles. Claramente no humano, pero tampoco una hada — le faltan alas y aura mágica.',
+    'Enano':     'Baja estatura, complexión robusta, barba prominente. Inconfundiblemente enano.',
+    'Mediano':   'Estatura muy baja (aprox. 1 metro), pies grandes y velludos, expresión afable.',
+    'Tiefling':  'Pequeños cuernos en la frente, cola visible, ojos de color inusual. Ascendencia demoníaca evidente.',
+    'Vampiro':   'Piel extremadamente pálida, ojos rojizos, colmillos apenas visibles. Presencia inquietante.',
+    'Hada':      'Alas translúcidas, aura luminosa tenue, estatura pequeña, rasgos etéreos. Inconfundiblemente feérica.',
+    'Fauno':     'Pequeños cuernos, piernas con pezuñas, rasgos mezcla de humano y cabra.',
+    'Dragonborn':'Escamas visibles en piel y cara, rasgos reptilianos, complexión imponente.',
+    'Orco':      'Piel verdosa, colmillos prominentes, complexión muy poderosa.',
+    'Semiélfico':'Orejas ligeramente puntiagudas, rasgos a medio camino entre humano y elfo.',
+    'Gnomo':     'Estatura muy pequeña, ojos grandes y curiosos, expresión vivaz.'
+};
+
+// Ropa inicial por defecto según clase
+const CLASS_DEFAULT_OUTFIT = {
+    'Guerrero':   { ropa: 'Armadura de cuero endurecido con coderas de metal, capa marrón de viajero', arma: 'Espada de una mano', offhand: 'Escudo de madera reforzado', accesorio: '' },
+    'Mago':       { ropa: 'Túnica azul oscuro con bordados arcanos, cinturón de cuero con bolsillos', arma: 'Bastón de madera nudosa', offhand: '', accesorio: 'Bolsa de componentes mágicos' },
+    'Pícaro':     { ropa: 'Ropa oscura de cuero ligero, capucha que puede subirse, botas silenciosas', arma: 'Daga de hoja fina', offhand: 'Segunda daga', accesorio: 'Juego de ganzúas oculto' },
+    'Clérigo':    { ropa: 'Hábito de la orden con símbolo divino bordado, sandalias resistentes', arma: 'Maza ceremonial', offhand: 'Símbolo sagrado', accesorio: '' },
+    'Bardo':      { ropa: 'Ropas coloridas de viajero, chaleco con muchos bolsillos, botas de cuero', arma: 'Espada estoque ligera', offhand: '', accesorio: 'Instrumento musical (laúd o flauta)' },
+    'Druida':     { ropa: 'Túnica de lana natural sin teñir, cinturón de cuero trenzado con hojas secas', arma: 'Bastón de madera viva', offhand: '', accesorio: 'Bolsa de hierbas y semillas' },
+    'Explorador': { ropa: 'Ropa de cuero ligera verde y marrón, capa de camuflaje forestal, botas altas', arma: 'Arco largo', offhand: 'Carcaj con flechas', accesorio: 'Daga de caza en el cinturón' },
+    'Paladín':    { ropa: 'Armadura de placas pulida con símbolo divino en el pecho, capa blanca', arma: 'Espada larga sagrada', offhand: 'Escudo con emblema divino', accesorio: '' },
+    'Hechicero':  { ropa: 'Ropas elegantes pero extrañas, telas que parecen moverse solas, collar peculiar', arma: 'Varita de cristal', offhand: '', accesorio: 'Collar con gema que pulsa levemente' },
+    'Monje':      { ropa: 'Ropas sencillas de lino beige, faja ancha de tela, pies descalzos o sandalias', arma: 'Bastón de entrenamiento', offhand: '', accesorio: 'Cuentas de meditación en la muñeca' }
+};
+
+function getPortraitUrl(char, size=512) {
+    if (!char) return '';
+    const raceVisual = RACE_VISUALS[char.race] || char.race;
+    const appearance = char.appearance ? char.appearance + ', ' : '';
+    const gender = char.gender && char.gender !== 'Otro' ? char.gender === 'Mujer' ? 'woman' : 'man' : '';
+    const prompt = encodeURIComponent(`fantasy character portrait, ${gender} ${raceVisual} ${char.classe}, ${appearance}semi-realistic digital painting, highly detailed face and eyes, dramatic cinematic lighting, dark moody background with warm rim light, intricate fantasy costume with fine details, artstation trending, D&D character art, 8k resolution, professional illustration`);
+    const seed = char.portraitSeed || 42;
+    return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
+}
+function getCompanionPortraitUrl(companion, size=256) {
+    const desc = companion.description ? companion.description + ', ' : '';
+    const prompt = encodeURIComponent(`fantasy character portrait, ${companion.name} ${companion.role||''}, ${desc}semi-realistic digital painting, highly detailed face, dramatic cinematic lighting, dark moody background, intricate fantasy costume, artstation trending, D&D character art`);
+    const seed = companion.portraitSeed || (companion.name.split('').reduce((a,c)=>a+c.charCodeAt(0),0) * 17 % 99999);
+    return `https://image.pollinations.ai/prompt/${prompt}?width=${size}&height=${Math.round(size*1.25)}&nologo=true&seed=${seed}&model=flux`;
+}
+
+// ===================== WORLD STATE =====================
+function getWorldState() {
+    try { return JSON.parse(localStorage.getItem('dndWorldState') || '{"events":[]}'); } catch(e) { return { events: [] }; }
+}
+function saveWorldEvent(event) {
+    const ws = getWorldState();
+    event.id = 'evt_' + Date.now();
+    event.date = new Date().toISOString().slice(0,10);
+    ws.events.push(event);
+    localStorage.setItem('dndWorldState', JSON.stringify(ws));
+    fsSaveMain();
+}
+function getEventsForLocation(location) {
+    if (!location) return [];
+    const loc = location.toLowerCase();
+    return getWorldState().events.filter(e =>
+        e.location && (e.location.toLowerCase().includes(loc) || loc.includes(e.location.toLowerCase()))
+    );
+}
+
+// ===================== CHARACTER MANAGEMENT =====================
+function generateId() { return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,5); }
+
+function getAllCharacters() {
+    try { return JSON.parse(localStorage.getItem('dndCharacters') || '[]'); } catch(e) { return []; }
+}
+function saveAllCharacters(chars) { localStorage.setItem('dndCharacters', JSON.stringify(chars)); fsSaveMain(); }
+
+function getActiveCharId() { return localStorage.getItem('dndActiveCharId'); }
+function setActiveCharId(id) { localStorage.setItem('dndActiveCharId', id); }
+
+function getCharData(id) {
+    const chars = getAllCharacters();
+    return chars.find(c => c.id === id) || null;
+}
+function updateCharData(charObj) {
+    const chars = getAllCharacters();
+    const idx = chars.findIndex(c => c.id === charObj.id);
+    if (idx >= 0) chars[idx] = charObj; else chars.push(charObj);
+    saveAllCharacters(chars);
+}
+function getGameState(id) {
+    try { return JSON.parse(localStorage.getItem('dndGameState_' + id) || 'null'); } catch(e) { return null; }
+}
+function saveGameStateFor(id, gs) { localStorage.setItem('dndGameState_' + id, JSON.stringify(gs)); fsSaveGameState(id, gs); }
+function getChatHistory(id) {
+    try { return JSON.parse(localStorage.getItem('dndChatHistory_' + id) || '[]'); } catch(e) { return []; }
+}
+function saveChatHistoryFor(id, ch) { localStorage.setItem('dndChatHistory_' + id, JSON.stringify(ch)); fsSaveChatHistory(id, ch); }
+function getAdventure(id) {
+    try { return JSON.parse(localStorage.getItem('dndAdventure_' + id) || 'null'); } catch(e) { return null; }
+}
+function saveAdventureFor(id, adv) { localStorage.setItem('dndAdventure_' + id, JSON.stringify(adv)); fsSaveAdventure(id, adv); }
+
+// ===================== SESSION STATE =====================
+const state = {
+    apiKey: null,
+    activeCharId: null,
+    character: null,
+    adventure: null,
+    gameState: {
+        location:'Taberna de Rurik', timeOfDay:'Tarde',
+        hp:0, maxHp:0, inventory:[], quest:'', summary:'',
+        companions:[], relationships:{}, npcs:[],
+        knowledges:[], learnedAbilities:[],
+        skillUses:{ combat:0, magic:0, stealth:0, social:0, nature:0 },
+        classEvolution:'', curse:''
+    },
+    chatHistory: [],
+    turnCount: 0,
+    pendingRoll: null
+};
+
+// Debug configuration
+const DEBUG_IA_COMMUNICATION = false; // Set to true to enable debug logging
+
+const appDiv = document.getElementById('app');
+
+// ===================== ROLL SYSTEM =====================
+function guessStatFromSkill(skill) {
+    const map = {
+        'Persuasión':'CAR','Carisma':'CAR','Engaño':'CAR','Intimidación':'CAR','Seducción':'CAR','Actuación':'CAR',
+        'Sigilo':'DES','Acrobacias':'DES','Hurto':'DES','Destreza':'DES',
+        'Fuerza':'FUE','Atletismo':'FUE','Ataque':'FUE','Combate':'FUE',
+        'Magia':'INT','Arcanos':'INT','Historia':'INT','Investigación':'INT','Conocimiento':'INT',
+        'Percepción':'SAB','Medicina':'SAB','Naturaleza':'SAB','Supervivencia':'SAB','Intuición':'SAB',
+        'Constitución':'CON','Resistencia':'CON'
+    };
+    return map[skill] || 'DES';
+}
+
+// Helper function to convert item string to Item object (for backward compatibility)
+function createItemFromName(itemName) {
+    if (typeof itemName !== 'string') {
+        return itemName;
+    }
+
+    const name = itemName.trim();
+    if (!name) {
+        return { name: 'Item desconocido', type: 'objeto', damage: null, rarity: 'común', description: '', equipped: false };
+    }
+
+    const lowerName = name.toLowerCase();
+    let type = 'objeto';
+    let damage = null;
+
+    if (lowerName.includes('espada') || lowerName.includes('daga') || lowerName.includes('arco') ||
+        lowerName.includes('hacha') || lowerName.includes('maz') || lowerName.includes('lanza') ||
+        lowerName.includes('bastón') || lowerName.includes('club') || lowerName.includes('martillo')) {
+        type = 'arma';
+        damage = 6;
+    } else if (lowerName.includes('armadura') || lowerName.includes('escudo') || lowerName.includes('ropa') ||
+               lowerName.includes('vestiduras') || lowerName.includes('túnica') || lowerName.includes('capa') ||
+               lowerName.includes('yelmo') || lowerName.includes('guantes') || lowerName.includes('botas')) {
+        type = 'armadura';
+    } else if (lowerName.includes('poción') || lowerName.includes('veneno') || lowerName.includes('curativa') ||
+               lowerName.includes('antídoto') || lowerName.includes('aceite') || lowerName.includes('pergamino')) {
+        type = 'consumible';
+    } else if (lowerName.includes('moneda') || lowerName.includes('gem') || lowerName.includes('joya') ||
+               lowerName.includes('arte') || lowerName.includes('tesoro')) {
+        type = 'tesoro';
+    } else if (lowerName.includes('componente') || lowerName.includes('herramienta') || lowerName.includes('kit') ||
+               lowerName.includes('libro') || lowerName.includes('varita') || lowerName.includes('orbe') ||
+               lowerName.includes('amuleto') || lowerName.includes('símbolo')) {
+        type = 'componente';
+    } else if (lowerName.includes('ración') || lowerName.includes('pan') || lowerName.includes('agua') ||
+               lowerName.includes('vino') || lowerName.includes('comida') || lowerName.includes('hidromiel')) {
+        type = 'ración';
+    }
+
+    return { name, type, damage, rarity: 'común', description: '', equipped: false };
+}
+
+function guessSkillCategory(skill) {
+    const categoryMap = {
+        'Persuasión':'social','Carisma':'social','Engaño':'social','Intimidación':'social','Seducción':'social','Actuación':'social',
+        'Sigilo':'stealth','Acrobacias':'stealth','Hurto':'stealth','Destreza':'stealth',
+        'Fuerza':'combat','Atletismo':'combat','Ataque':'combat','Combate':'combat',
+        'Magia':'magic','Arcanos':'magic','Historia':'magic','Investigación':'magic','Conocimiento':'magic',
+        'Percepción':'nature','Medicina':'nature','Naturaleza':'nature','Supervivencia':'nature','Intuición':'nature',
+        'Constitución':'nature','Resistencia':'nature'
+    };
+    return categoryMap[skill] || 'combat'; // default to combat for unknown skills
+}
+
+// Data-driven action detection rules for improved maintainability
+const ACTION_RULES = [
+  {
+    name: 'social',
+    keywords: ['convencer', 'seducir', 'intimidar', 'mentir', 'pedir favor', 'flirtear', 'persuadir', 'engañar', 'actuar'],
+    determine: (actionLower) => {
+      let skill = 'Persuasión';
+      if (actionLower.includes('seducir') || actionLower.includes('flirtear')) skill = 'Seducción';
+      else if (actionLower.includes('intimidar')) skill = 'Intimidación';
+      else if (actionLower.includes('mentir') || actionLower.includes('engañar')) skill = 'Engaño';
+      else if (actionLower.includes('actuar')) skill = 'Actuación';
+
+      // Determine DC based on target's disposition/willingness
+      let dc = 12; // Default moderate (neutral disposition)
+      let reason = "Chequeo social";
+
+      if (actionLower.includes('amigo') || actionLower.includes('aliado') ||
+          actionLower.includes('confía') || actionLower.includes('bien disposed')) {
+        dc = 8;
+        reason = "Persuadir a aliado dispuesto";
+      }
+      else if (actionLower.includes('enemigo') || actionLower.includes('hostil') ||
+               actionLower.includes('resistente') || actionLower.includes('opuesto')) {
+        dc = 15;
+        reason = "Persuadir a enemigo u oponente";
+      }
+      else if (actionLower.includes('esceptico') || actionLower.includes('dudoso') ||
+               actionLower.includes('desconfiado') || actionLower.includes('reacio')) {
+        dc = 14;
+        reason = "Persuadir a persona escéptica";
+      }
+
+      return { skill: skill, stat: 'CAR', dc, reason };
+    }
+  },
+  {
+    name: 'combat',
+    keywords: ['atacar', 'pelear', 'golpear', 'disparar', 'lanzar arma', 'herir', 'herida'],
+    determine: (actionLower) => {
+      let skill = 'Ataque';
+      let stat = 'FUE';
+
+      if (actionLower.includes('disparar') || actionLower.includes('arma a distancia') ||
+          actionLower.includes('arco') || actionLower.includes('ballesta')) {
+        stat = 'DES';
+      }
+
+      // Determine DC based on opponent's defense/armor
+      let dc = 12; // Default moderate
+      let reason = "Ataque estándar";
+
+      if (actionLower.includes('defensa débil') || actionLower.includes('desarmado') ||
+          actionLower.includes('vulnerable')) {
+        dc = 8;
+        reason = "Ataque a objetivo vulnerable";
+      }
+      else if (actionLower.includes('armadura pesada') || actionLower.includes('defensa alta') ||
+               actionLower.includes('protegido') || actionLower.includes('escudo')) {
+        dc = 15;
+        reason = "Ataque contra defensa alta";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'stealth',
+    keywords: ['esconder', 'sigilo', 'moverse sin ser visto', 'robar', 'hurto', 'sigiloso', 'invisible'],
+    determine: (actionLower) => {
+      let skill = 'Sigilo';
+      let stat = 'DES';
+
+      // Determine DC based on environment vigilance
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de sigilo";
+
+      if (actionLower.includes('multitud') || actionLower.includes('lugar transitado') ||
+          actionLower.includes('vigilado') || actionLower.includes('guardia')) {
+        dc = 15;
+        reason = "Sigilo en área vigilada";
+      }
+      else if (actionLower.includes('solo') || actionLower.includes('desierto') ||
+               actionLower.includes('oscuro') || actionLower.includes('sin testigos')) {
+        dc = 8;
+        reason = "Sigilo en área desierta";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'magic',
+    keywords: ['magia', 'hechizo', 'conjuro', 'arcano', 'hechizar', 'invocar'],
+    determine: (actionLower) => {
+      let skill = 'Magia';
+      let stat = 'INT';
+
+      // Determine DC based on spell complexity/power
+      let dc = 12; // Default moderate
+      let reason = "Conjuro estándar";
+
+      if (actionLower.includes('simple') || actionLower.includes('menor') ||
+          actionLower.includes('truco')) {
+        dc = 8;
+        reason = "Conjuro menor";
+      }
+      else if (actionLower.includes('poderoso') || actionLower.includes('mayor') ||
+               actionLower.includes('épico') || actionLower.includes('legendario')) {
+        dc = 15;
+        reason = "Conjuro poderoso";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'investigation',
+    keywords: ['investigar', 'examinar', 'buscar', 'inspeccionar', 'analizar', 'estudiar', 'rastrear'],
+    determine: (actionLower) => {
+      let skill = 'Investigación';
+      let stat = 'INT';
+
+      // Determine DC based on clue obscurity
+      let dc = 12; // Default moderate
+      let reason = "Investigación estándar";
+
+      if (actionLower.includes('evidente') || actionLower.includes('obvio') ||
+          actionLower.includes('claro')) {
+        dc = 8;
+        reason = "Investigación de evidencia evidente";
+      }
+      else if (actionLower.includes('oculto') || actionLower.includes('secreto') ||
+               actionLower.includes('difícil de encontrar') || actionLower.includes('pista tenue')) {
+        dc = 15;
+        reason = "Investigación de evidencia oculta";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'perception',
+    keywords: ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui', 'observar', 'notar', 'percibir'],
+    determine: (actionLower) => {
+      // Use root-based detection for perception (more flexible)
+      const perceptionRoots = ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui'];
+      const hasPerceptionRoot = perceptionRoots.some(root => actionLower.includes(root));
+
+      if (!hasPerceptionRoot) {
+        return null; // Not a perception action
+      }
+
+      let skill = 'Percepción';
+      let stat = 'SAB';
+
+      // Determine DC based on subtlety of what's being perceived
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de percepción";
+
+      if (actionLower.includes('fuerte') || actionLower.includes('evidente') ||
+          actionLower.includes('notorio') || actionLower.includes('obvio')) {
+        dc = 8;
+        reason = "Percepción de estímulo evidente";
+      }
+      else if (actionLower.includes('sutil') || actionLower.includes('oculto') ||
+               actionLower.includes('susurro') || actionLower.includes('lejos') ||
+               actionLower.includes('débil') || actionLower.includes('tenue')) {
+        dc = 15;
+        reason = "Percepción de estímulo sutil";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'athletic',
+    keywords: ['saltar', 'trepar', 'correr', 'nadar', 'equilibrio', 'atlético', 'fuerza bruta'],
+    determine: (actionLower) => {
+      let skill = 'Atletismo';
+      // Could be FUE or DES depending on the action
+      let stat = 'FUE'; // Default to strength
+
+      if (actionLower.includes('equilibrio') || actionLower.includes('acrobacia') ||
+          actionLower.includes('flexibilidad') || actionLower.includes('agilidad')) {
+        stat = 'DES';
+      }
+
+      // Determine DC based on obstacle difficulty
+      let dc = 12; // Default moderate
+      let reason = "Chequeo atlético";
+
+      if (actionLower.includes('fácil') || actionLower.includes('sencillo') ||
+          actionLower.includes('bajo')) {
+        dc = 8;
+        reason = "Actividad atlética sencilla";
+      }
+      else if (actionLower.includes('difícil') || actionLower.includes('complicado') ||
+               actionLower.includes('alto') || actionLower.includes('pesado') ||
+               actionLower.includes('extremo')) {
+        dc = 15;
+        reason = "Actividad atlética difícil";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'resistance',
+    keywords: ['resistir', 'aguantar', 'soportar', 'tolerar', 'veneno', 'enfermedad', 'dolor', 'miedo'],
+    determine: (actionLower) => {
+      let skill = 'Constitución';
+      let stat = 'CON';
+
+      // Determine DC based on effect intensity
+      let dc = 12; // Default moderate
+      let reason = "Tirada de resistencia";
+
+      if (actionLower.includes('leve') || actionLower.includes('suave') ||
+          actionLower.includes('mínimo')) {
+        dc = 8;
+        reason = "Resistencia a efecto leve";
+      }
+      else if (actionLower.includes('intenso') || actionLower.includes('fuerte') ||
+               actionLower.includes('grave') || actionLower.includes('letal') ||
+               actionLower.includes('mortal')) {
+        dc = 15;
+        reason = "Resistencia a efecto intenso";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'knowledge',
+    keywords: ['recordar', 'saber', 'conocer', 'lore', 'historia', 'identificar', 'descifrar', 'tradición'],
+    determine: (actionLower) => {
+      let skill = 'Historia';
+      let stat = 'INT';
+
+      // Determine DC based on obscurity of knowledge
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de conocimiento";
+
+      if (actionLower.includes('común') || actionLower.includes('básico') ||
+          actionLower.includes('known') || actionLower.includes('evidente')) {
+        dc = 8;
+        reason = "Conocimiento común";
+      }
+      else if (actionLower.includes('arcano') || actionLower.includes('antiguo') ||
+               actionLower.includes('olvidado') || actionLower.includes('secreto') ||
+               actionLower.includes('misterioso') || actionLower.includes('legendario')) {
+        dc = 15;
+        reason = "Conocimiento arcano o antiguo";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  },
+  {
+    name: 'healing',
+    keywords: ['curar', 'sanar', 'medicina', 'tratamiento', 'cuidar', 'aliviar', 'herida'],
+    determine: (actionLower) => {
+      let skill = 'Medicina';
+      let stat = 'SAB';
+
+      // Determine DC based on injury severity
+      let dc = 12; // Default moderate
+      let reason = "Chequeo de medicina";
+
+      if (actionLower.includes('herida leve') || actionLower.includes('rasguño') ||
+          actionLower.includes('moretón')) {
+        dc = 8;
+        reason = "Curación de herida leve";
+      }
+      else if (actionLower.includes('herida grave') || actionLower.includes('sangrado') ||
+               actionLower.includes('herida profunda') || actionLower.includes('fractura')) {
+        dc = 15;
+        reason = "Curación de herida grave";
+      }
+
+      return { skill: skill, stat: stat, dc: dc, reason: reason };
+    }
+  }
+];
+
+// Refactored guessRequiredRoll function using data-driven approach
+function guessRequiredRoll(action) {
+    const actionLower = action.toLowerCase();
+
+    // Try each rule in order
+    for (const rule of ACTION_RULES) {
+        // Check if any keyword matches
+        if (rule.keywords.some(keyword => actionLower.includes(keyword))) {
+            return rule.determine(actionLower);
+        }
+    }
+
+    // Default to no roll for movement without obstacles, thoughts, passive actions
+    return null;
+}
+
+function getRecentHistory() {
+    // Get last 3 exchanges (player + DM pairs) or fewer if not available
+    const recentExchanges = [];
+    const chatHistory = state.chatHistory;
+
+    // Start from the end and go backwards, collecting up to 3 exchanges
+    let i = chatHistory.length - 1;
+    let exchangesCollected = 0;
+
+    while (i >= 0 && exchangesCollected < 3) {
+        // Look for a player message followed by a DM message (or vice versa)
+        if (chatHistory[i].role === 'player') {
+            // Found player message, look for preceding DM message if available
+            const playerMsg = chatHistory[i];
+            let dmMsg = null;
+
+            // Check if there's a DM message before this player message
+            if (i > 0 && chatHistory[i-1].role === 'dm') {
+                dmMsg = chatHistory[i-1];
+                recentExchanges.unshift({ dm: dmMsg, player: playerMsg });
+                i -= 2; // Skip both messages
+            } else {
+                // No preceding DM message, just add the player message
+                recentExchanges.unshift({ player: playerMsg });
+                i -= 1;
+            }
+            exchangesCollected++;
+        } else if (chatHistory[i].role === 'dm') {
+            // Found DM message, look for following player message if available
+            const dmMsg = chatHistory[i];
+            let playerMsg = null;
+
+            // Check if there's a player message after this DM message
+            if (i < chatHistory.length - 1 && chatHistory[i+1].role === 'player') {
+                playerMsg = chatHistory[i+1];
+                recentExchanges.unshift({ dm: dmMsg, player: playerMsg });
+                i += 2; // Skip both messages
+            } else {
+                // No following player message, just add the DM message
+                recentExchanges.unshift({ dm: dmMsg });
+                i += 1;
+            }
+            exchangesCollected++;
+        } else {
+            i -= 1;
+        }
+    }
+
+    // Format the recent exchanges into a string
+    if (recentExchanges.length === 0) {
+        return "Inicio de la partida.";
+    }
+
+    let historyString = "";
+    recentExchanges.forEach((exchange, index) => {
+        if (exchange.dm && exchange.player) {
+            historyString += `- Maestra: "${exchange.dm.content.substring(0, 100)}${exchange.dm.content.length > 100 ? '...' : ''}"\n`;
+            historyString += `- Jugador: "${exchange.player.content.substring(0, 100)}${exchange.player.content.length > 100 ? '...' : ''}"\n`;
+        } else if (exchange.dm) {
+            historyString += `- Maestra: "${exchange.dm.content.substring(0, 100)}${exchange.dm.content.length > 100 ? '...' : ''}"\n`;
+        } else if (exchange.player) {
+            historyString += `- Jugador: "${exchange.player.content.substring(0, 100)}${exchange.player.content.length > 100 ? '...' : ''}"\n`;
+        }
+    });
+
+    return historyString.trim();
+}
+
+function validateStateUpdates(stateUpdates) {
+    if (!stateUpdates || typeof stateUpdates !== 'object') return;
+
+    // Validate location
+    if (stateUpdates.location !== undefined) {
+        if (typeof stateUpdates.location !== 'string' || stateUpdates.location.trim() === '') {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid location in stateUpdates:', stateUpdates.location);
+            }
+        }
+    }
+
+    // Validate HP
+    if (stateUpdates.hp !== undefined) {
+        if (typeof stateUpdates.hp !== 'number' || stateUpdates.hp < 0) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid HP in stateUpdates:', stateUpdates.hp);
+            }
+        }
+        // Note: We don't validate against maxHp here because maxHp might be updated in the same batch
+    }
+
+    // Validate timeOfDay
+    if (stateUpdates.timeOfDay !== undefined) {
+        if (typeof stateUpdates.timeOfDay !== 'string' || stateUpdates.timeOfDay.trim() === '') {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid timeOfDay in stateUpdates:', stateUpdates.timeOfDay);
+            }
+        }
+    }
+
+    // Validate inventory
+    if (stateUpdates.inventory !== undefined) {
+        if (!Array.isArray(stateUpdates.inventory)) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Invalid inventory in stateUpdates: not an array', stateUpdates.inventory);
+            }
+        }
+    }
+
+    // Validate that we're not setting both hp and maxHp to invalid combinations
+    if (stateUpdates.hp !== undefined && stateUpdates.maxHp !== undefined) {
+        if (stateUpdates.hp < 0 || stateUpdates.maxHp < 0) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('Negative HP or maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
+            }
+        }
+        if (stateUpdates.hp > stateUpdates.maxHp) {
+            if (DEBUG_IA_COMMUNICATION) {
+                console.warn('HP exceeds maxHP in stateUpdates:', { hp: stateUpdates.hp, maxHp: stateUpdates.maxHp });
+            }
+        }
+    }
+}
+
+function rollD20(statValue, dc) {
+    const roll = Math.floor(Math.random()*20)+1;
+    const mod = Math.floor((statValue-10)/2);
+    const total = roll+mod;
+    return { roll, mod, total, dc, success: total>=dc };
+}
+
+// Skills that trigger an opposed NPC roll
+const OPPOSED_ROLL_SKILLS = {
+    'Engaño':     { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Actuación':  { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Seducción':  { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Persuasión': { npcSkill: 'Perspicacia', npcStat: 'SAB', label: 'Perspicacia del NPC' },
+    'Intimidación': { npcSkill: 'Resistencia', npcStat: 'CON', label: 'Resistencia del NPC' },
+};
+
+// Estimate NPC SAB/CON based on their relationship tier and role keywords
+function estimateNpcStat(stat) {
+    // Find the most recently referenced NPC in the last DM message
+    const lastDM = state.chatHistory.findLast(m => m.role === 'dm');
+    const npcList = state.gameState.npcs || [];
+    let targetNpc = null;
+
+    if (lastDM && npcList.length > 0) {
+        // Find which registered NPC appears in the last DM message
+        for (const npc of npcList) {
+            if (lastDM.content && lastDM.content.toLowerCase().includes(npc.name.toLowerCase())) {
+                targetNpc = npc;
+                break;
+            }
+        }
+    }
+
+    // Base stat: 10 (average human). Adjust by role keywords.
+    let base = 10;
+    if (targetNpc) {
+        const role = (targetNpc.role || '').toLowerCase();
+        const personality = (targetNpc.personality || '').toLowerCase();
+        // Wise/perceptive roles get higher SAB
+        if (stat === 'SAB') {
+            if (/mago|sabio|oráculo|sacerdote|druida|espía|detective|guard/.test(role)) base = 13;
+            if (/lord|noble|rey|comandante|líder/.test(role)) base = 12;
+            if (/astuto|sagaz|perceptivo|desconfiado/.test(personality)) base += 2;
+            if (/ingenuo|simple|confiado/.test(personality)) base -= 2;
+        }
+        // CON for intimidation resistance
+        if (stat === 'CON') {
+            if (/guerrero|soldado|guard|mercenario|campeón/.test(role)) base = 13;
+            if (/anciano|débil|asustado/.test(role + personality)) base = 8;
+        }
+    }
+    return Math.max(6, Math.min(18, base));
+}
+
+window.executeRoll = async function(dmMsgIdx) {
+    if (!state.pendingRoll) return;
+    const { trigger, statValue } = state.pendingRoll;
+    state.pendingRoll = null;
+    const statVal = statValue || 10;
+    const result = { ...rollD20(statVal, trigger.dc), skill: trigger.skill };
+
+    // Track skill usage
+    const category = guessSkillCategory(trigger.skill);
+    state.gameState.skillUses[category]++;
+    updateClassEvolution();
+
+    // Build base roll message
+    const mod = result.mod >= 0 ? '+'+result.mod : result.mod;
+    let rollMsg = `[Tirada de ${trigger.skill}: d20=${result.roll} ${mod} = ${result.total} vs DC ${trigger.dc} → ${result.success ? '¡ÉXITO!' : 'FALLO'}]`;
+
+    // Opposed NPC roll for social skills
+    const opposedDef = OPPOSED_ROLL_SKILLS[trigger.skill];
+    let npcRollResult = null;
+    if (opposedDef) {
+        const npcStatVal = estimateNpcStat(opposedDef.npcStat);
+        const npcRoll = Math.floor(Math.random() * 20) + 1;
+        const npcMod = Math.floor((npcStatVal - 10) / 2);
+        const npcTotal = npcRoll + npcMod;
+        const npcModStr = npcMod >= 0 ? '+' + npcMod : '' + npcMod;
+        const playerWins = result.total >= npcTotal;
+
+        npcRollResult = { skill: opposedDef.npcSkill, stat: opposedDef.npcStat, roll: npcRoll, mod: npcMod, total: npcTotal, playerWins };
+
+        rollMsg += `\n[${opposedDef.label}: d20=${npcRoll} ${npcModStr} = ${npcTotal}]`;
+        rollMsg += `\n[RESULTADO OPUESTO: jugador ${result.total} vs NPC ${npcTotal} → ${playerWins ? 'JUGADOR GANA — el NPC no detecta el engaño / acepta' : 'NPC GANA — el NPC sospecha o resiste'}]`;
+        rollMsg += `\nIMPORTANTE PARA EL NARRADOR: ${playerWins
+            ? `El NPC no detecta nada sospechoso. Narra que acepta o cree al jugador.`
+            : `El NPC supera la tirada del jugador. Narra que el NPC sospecha, hace una pregunta difícil, o directamente descubre el engaño. La reacción debe ser proporcional a la diferencia (${npcTotal - result.total} puntos de ventaja NPC).`}`;
+    }
+
+    // Update player message to show roll result inline (include NPC roll if any)
+    if (state.chatHistory[dmMsgIdx]) {
+        state.chatHistory[dmMsgIdx].roll = result;
+        state.chatHistory[dmMsgIdx].npcRoll = npcRollResult;
+        state.chatHistory[dmMsgIdx].rollState = null;
+        const container = document.getElementById('chatContainer');
+        const existing = container?.querySelector(`[data-idx="${dmMsgIdx}"]`);
+        if (existing) existing.replaceWith(createMessageEl(state.chatHistory[dmMsgIdx], dmMsgIdx));
+    }
+
+    const playerInput = document.getElementById('playerInput');
+    const sendBtn = document.getElementById('sendBtn');
+    if (playerInput) playerInput.disabled = true;
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '...'; }
+    await callAndRespond(rollMsg, result);
+};
+
+function updateClassEvolution() {
+    const { combat, magic, stealth, social, nature } = state.gameState.skillUses;
+    const cls = state.character.classe;
+    let evo = '';
+
+    // Guerrero evolutions
+    if (magic>=5 && cls==='Guerrero') evo='Guerrero Arcano';
+    else if (nature>=5 && cls==='Guerrero') evo='Cazador';
+    else if (combat>=3 && nature>=3 && cls==='Guerrero') evo='Guerrero de la Naturaleza';
+
+    // Mago evolutions
+    else if (combat>=5 && cls==='Mago') evo='Mago de Batalla';
+    else if (nature>=5 && cls==='Mago') evo='Hechicero de la Naturaleza';
+    else if (stealth>=3 && nature>=3 && cls==='Mago') evo='Mago Sigiloso';
+
+    // Pícaro evolutions
+    else if (social>=5 && cls==='Pícaro') evo='Maestro Manipulador';
+    else if (nature>=5 && cls==='Pícaro') evo='Rastreador';
+    else if (combat>=3 && nature>=3 && cls==='Pícaro') evo='Pícaro Cazador';
+
+    // Explorador evolutions (if base class is Explorador)
+    else if (nature>=5 && cls==='Explorador') evo='Explorador Maestro';
+    else if (combat>=4 && cls==='Explorador') evo='Explorador Guerreriza';
+
+    // Cleric evolutions
+    else if (nature>=5 && cls==='Clérigo') evo='Druida';
+    else if (combat>=3 && nature>=3 && cls==='Clérigo') evo='Clérigo de la Guerra';
+
+    // General combinations
+    else if (combat>=3 && stealth>=3) evo='Sombra Luchadora';
+    else if (social>=4 && magic>=3) evo='Bardo Arcano';
+    else if (magic>=3 && nature>=3) evo='Hechicero Sabio';
+    else if (combat>=3 && social>=3) evo='Líder Carismático';
+
+    state.gameState.classEvolution = evo;
+}
+
+// Experience and leveling system
+function addExperience(amount) {
+    if (!state.character) return;
+
+    state.character.experience += amount;
+
+    // XP needed for next level: level * 100 (so level 2 needs 200 XP total, level 3 needs 300, etc.)
+    // This means to go from level N to N+1, you need (N+1) * 100 XP
+    const xpForNextLevel = (state.character.level + 1) * 100;
+
+    // Check if we've leveled up
+    while (state.character.experience >= xpForNextLevel) {
+        state.character.experience -= xpForNextLevel;
+        state.character.level++;
+        state.character.skillPoints += 2; // Grant 2 skill points per level up
+
+        // Check for class evolution after leveling up (since stats might have increased via skill points)
+        updateClassEvolution();
+
+        // Update xpForNextLevel for the new level
+        xpForNextLevel = (state.character.level + 1) * 100;
+
+        // Notify player of level up
+        addDMMessage(`¡Has alcanzado el nivel ${state.character.level}! Has ganado 2 puntos de habilidad para asignar a tus estadísticas.`);
+
+        // Update UI
+        updateStatus();
+        updatePartyPanel();
+    }
+
+    // Save game state
+    saveGameStateFor(state.activeCharId, state.gameState);
+}
+
+window.useAction = async function(text) {
+    const playerInput = document.getElementById('playerInput');
+    const sendBtn = document.getElementById('sendBtn');
+    if (!playerInput || !sendBtn) return;
+    // Action chips go straight to the AI — no client-side pre-roll guess.
+    // If a roll is needed the AI will request it via [ROLL:] in its response.
+    state.pendingRoll = null;
+    playerInput.value = '';
+    playerInput.disabled = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = '...';
+    addPlayerMessage(text, null, 'done', state.chatHistory.length);
+    await callAndRespond(text, null);
+};
+
+// ===================== INIT =====================
+async function init() {
+    const fbConfig = localStorage.getItem('fbConfig');
+    if (!fbConfig) { showScreen('firebaseSetup'); return; }
+    try { initFirebase(JSON.parse(fbConfig)); } catch(e) { localStorage.removeItem('fbConfig'); showScreen('firebaseSetup'); return; }
+
+    // Inject CSS for roll badges
+    const style = document.createElement('style');
+    style.textContent = `
+        .roll-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.85rem;
+            margin: 4px 0;
+        }
+        .roll-badge.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .roll-badge.failure {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // If Firebase SDK didn't load (fbAuth is null), skip auth and sync
+    if (fbAuth !== null) {
+        await new Promise(resolve => {
+            const unsub = fbAuth.onAuthStateChanged(user => { unsub(); fbUser = user; resolve(); });
+        });
+        if (!fbUser) { showScreen('auth'); return; }
+
+        const loadingEl = document.createElement('div');
+        loadingEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0d0a07;color:#c9a84c;font-family:Cinzel,serif;font-size:1rem;letter-spacing:0.1em';
+        loadingEl.textContent = 'Sincronizando...';
+        document.body.appendChild(loadingEl);
+        await syncFromFirestore();
+        loadingEl.remove();
+    } else {
+        // Firebase not available, continue with localStorage only
+        // No need to set fbUser; we'll just skip sync.
+    }
+
+    state.apiKey = localStorage.getItem('groqApiKey');
+    if (!state.apiKey) { showScreen('apiKey'); return; }
+    migrateOldData();
+    showScreen('characterHub');
+}
+
+function migrateOldData() {
+    const oldChar = localStorage.getItem('dndCharacter');
+    if (oldChar && getAllCharacters().length === 0) {
+        try {
+            const char = JSON.parse(oldChar);
+            char.id = generateId();
+            char.status = 'alive';
+            char.created = new Date().toISOString().slice(0,10);
+            updateCharData(char);
+            const oldGs = localStorage.getItem('dndGameState');
+            if (oldGs) saveGameStateFor(char.id, JSON.parse(oldGs));
+            const oldCh = localStorage.getItem('dndChatHistory');
+            if (oldCh) saveChatHistoryFor(char.id, JSON.parse(oldCh));
+            const oldAdv = localStorage.getItem('dndAdventure');
+            if (oldAdv) saveAdventureFor(char.id, JSON.parse(oldAdv));
+        } catch(e) {}
+    }
+}
+
+function loadCharacter(charId) {
+    state.activeCharId = charId;
+    setActiveCharId(charId);
+    state.character = getCharData(charId);
+    const gs = getGameState(charId);
+    if (gs) Object.assign(state.gameState, gs);
+    else {
+        const conMod = Math.floor((state.character.stats.CON-10)/2);
+        state.gameState.maxHp = 10+conMod;
+        state.gameState.hp = state.gameState.maxHp;
+    }
+    // Ensure character has experience, level, and skillPoints fields for backward compatibility
+    if (!state.character.hasOwnProperty('experience')) state.character.experience = 0;
+    if (!state.character.hasOwnProperty('level')) state.character.level = 1;
+    if (!state.character.hasOwnProperty('skillPoints')) state.character.skillPoints = 0;
+    // Migrate: ensure knowledges and learnedAbilities exist in gameState
+    if (!Array.isArray(state.gameState.knowledges)) {
+        const starting = CLASS_STARTING_KNOWLEDGE[state.character.classe] || { knowledges:[], learnedAbilities:[] };
+        state.gameState.knowledges = starting.knowledges.map(k=>({...k}));
+    }
+    if (!Array.isArray(state.gameState.learnedAbilities)) {
+        const starting = CLASS_STARTING_KNOWLEDGE[state.character.classe] || { knowledges:[], learnedAbilities:[] };
+        state.gameState.learnedAbilities = starting.learnedAbilities.map(a=>({...a}));
+    }
+    // Migrate: ensure equipped slots exist
+    if (!state.gameState.equipped) {
+        const defaultOutfit = CLASS_DEFAULT_OUTFIT[state.character.classe] || { ropa:'', arma:'', offhand:'', accesorio:'' };
+        state.gameState.equipped = { ...defaultOutfit };
+    }
+    state.chatHistory = getChatHistory(charId);
+    state.adventure = getAdventure(charId);
+    state.turnCount = 0;
+    state.pendingRoll = null;
+}
+
+function showScreen(name) {
+    appDiv.innerHTML = '';
+    switch(name) {
+        case 'firebaseSetup': appDiv.innerHTML = renderFirebaseSetupScreen(); bindFirebaseSetupScreen(); break;
+        case 'auth': appDiv.innerHTML = renderAuthScreen(); bindAuthScreen(); break;
+        case 'apiKey': appDiv.innerHTML = renderApiKeyScreen(); bindApiKeyScreen(); break;
+        case 'characterHub': appDiv.innerHTML = renderCharacterHub(); bindCharacterHub(); break;
+        case 'characterCreation': appDiv.innerHTML = renderCharacterCreationScreen(); bindCharacterCreation(); break;
+        case 'adventureSelection': appDiv.innerHTML = renderAdventureSelectionScreen(); bindAdventureSelection(); break;
+        case 'chat': appDiv.innerHTML = renderChatScreen(); bindChat(); break;
+    }
+}
+
+// ===================== RENDER SCREENS =====================
+function renderApiKeyScreen() {
+    return `<div class="container">
+        <h1>Rurik Tavern</h1>
+        <p style="text-align:center;margin-bottom:1.5rem;color:var(--text-muted)">Ingresa tu API key de Groq para comenzar.</p>
+        <div class="input-group"><label>API Key de Groq</label><input type="password" id="apiKeyInput" placeholder="gsk_..."></div>
+        <button class="btn" id="saveApiKeyBtn">Comenzar</button>
+    </div>`;
+}
+
+function renderCharacterHub() {
+    const chars = getAllCharacters();
+    const cards = chars.map(c => {
+        const gs = getGameState(c.id);
+        const hp = gs ? gs.hp : (c.stats ? 10+Math.floor((c.stats.CON-10)/2) : 10);
+        const maxHp = gs ? gs.maxHp : hp;
+        const hpPct = Math.max(0, Math.min(100, (hp/maxHp)*100));
+        const adv = getAdventure(c.id);
+        const history = getChatHistory(c.id);
+        const isDead = c.status === 'dead';
+        const isCursed = c.status === 'cursed';
+        const hpColor = isDead ? '#555' : hpPct>60 ? '#4a7c59' : hpPct>30 ? '#8a6a20' : '#7c4a4a';
+        const statusBadge = isDead ? '<span class="char-status dead">💀 Muerto</span>' : isCursed ? `<span class="char-status cursed">🌑 Maldito</span>` : '<span class="char-status alive">⬤ Vivo</span>';
+        const icon = CLASS_ICONS[c.classe] || '⚔️';
+        const portraitUrl = getPortraitUrl(c, 200);
+        return `<div class="char-card ${isDead?'dead':''}" data-id="${c.id}" ${isDead?'':'style="cursor:pointer"'}>
+            <div class="char-card-avatar-wrap">
+                <img src="${isDead ? '' : portraitUrl}" class="char-card-portrait" alt="${c.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+                <div class="char-avatar-fallback" style="${isDead?'display:flex':'display:none'}">${isDead?'🪦':icon}</div>
+            </div>
+            <div class="char-card-info">
+                <div class="char-card-name">${c.name} ${statusBadge}</div>
+                <div class="char-card-class">${c.race} · ${c.classe}${c.classEvolution?' → '+c.classEvolution:''}</div>
+                ${isDead ? `<div class="char-death-note">${c.deathNote || 'Cayó en combate'}</div>` : `
+                <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
+                <div class="char-adv">${adv ? adv.title : 'Sin aventura'} · ${history.length} turnos</div>`}
+            </div>
+            <button class="char-delete-btn" data-id="${c.id}" title="Eliminar personaje">🗑️</button>
+        </div>`;
+    }).join('');
+
+    const worldState = getWorldState();
+    const legacyHtml = worldState.events.length > 0 ? `
+        <div class="legacy-section">
+            <div class="legacy-title">📜 Legado del Mundo</div>
+            ${worldState.events.slice(-5).reverse().map(e => `
+                <div class="legacy-event">
+                    <span class="legacy-type ${e.type}">${e.type==='death'?'💀':e.type==='heroic'?'⚔️':e.type==='curse'?'🌑':'✦'}</span>
+                    <div class="legacy-text"><strong>${e.characterName}</strong> en <em>${e.location}</em>: ${e.event}</div>
+                </div>`).join('')}
+        </div>` : '';
+
+    return `<div class="hub-screen">
+        <h1>Rurik Tavern</h1>
+        <div class="hub-chars">
+            ${cards}
+            <div class="char-card new-char" id="newCharBtn">
+                <div class="char-card-avatar">+</div>
+                <div class="char-card-info">
+                    <div class="char-card-name" style="color:var(--accent)">Nuevo Personaje</div>
+                    <div class="char-card-class" style="color:var(--text-muted)">Comenzar una nueva historia</div>
+                </div>
+            </div>
+        </div>
+        ${legacyHtml}
+        <div id="deleteModal" class="modal hidden"><div class="modal-box">
+            <div class="modal-title" style="color:#e05555">⚠️ Eliminar Personaje</div>
+            <div id="deleteModalText" style="font-size:0.85rem;color:var(--text-muted);text-align:center;margin:0.5rem 0;line-height:1.6"></div>
+            <p style="font-size:0.82rem;color:var(--text-muted);text-align:center">Escribe <strong style="color:var(--accent)">confirmar</strong> para borrar:</p>
+            <input type="text" id="deleteConfirmInput" placeholder="confirmar" class="inv-input" style="margin-top:0.4rem">
+            <button class="modal-btn danger" id="deleteConfirmBtn" disabled>🗑️ Eliminar para siempre</button>
+            <button class="modal-btn" id="deleteCancelBtn">✕ Cancelar</button>
+        </div></div>
+    </div>`;
+}
+
+function renderCharacterCreationScreen() {
+    const races = [['Humano','Versátil'],['Elfo','Ágil y perceptivo'],['Enano','Resistente'],['Mediano','Afortunado'],['Tiefling','Sangre demoníaca'],['Vampiro','Inmortal'],['Hada','Criatura mágica'],['Fauno','Espíritu del bosque'],['Dragonborn','Sangre de dragón'],['Orco','Fuerza bruta'],['Semiélfico','Dos mundos'],['Gnomo','Inventivo']];
+    const classes = [['Guerrero','Combate'],['Mago','Magia arcana'],['Pícaro','Sigilo'],['Clérigo','Fe divina'],['Bardo','Carisma'],['Druida','Naturaleza'],['Explorador','Bosque y arco'],['Paladín','Sagrado'],['Hechicero','Magia innata'],['Monje','Ki interior']];
+    return `<div class="container">
+        <h1>Nuevo Personaje</h1>
+        <div class="input-group"><label>Nombre</label><input type="text" id="charName" placeholder="Ej: Lyra, Gareth..."></div>
+        <div class="input-group"><label>Género</label><select id="charGender"><option value="Hombre">Hombre</option><option value="Mujer">Mujer</option><option value="No binario">No binario</option><option value="Otro">Otro</option></select></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+            <div class="input-group" style="margin:0"><label>Raza</label><select id="charRace"><option value="">Elige...</option>${races.map(([v,d])=>`<option value="${v}">${v} — ${d}</option>`).join('')}</select></div>
+            <div class="input-group" style="margin:0"><label>Clase</label><select id="charClass"><option value="">Elige...</option>${classes.map(([v,d])=>`<option value="${v}">${v} — ${d}</option>`).join('')}</select></div>
+        </div>
+        <div class="input-group"><label>Trasfondo</label><select id="charBackground"><option value="">Elige...</option>${['Soldado','Criminal','Noble','Huérfano','Mercader','Erudito','Marginado'].map(v=>`<option value="${v}">${v}</option>`).join('')}</select></div>
+        <div class="input-group"><label>Motivación (opcional)</label><input type="text" id="charMotivation" placeholder="Ej: vengar a mi familia..."></div>
+        <div class="input-group"><label>Descripción física (para generar retrato)</label><textarea id="charAppearance" rows="2" placeholder="Ej: cabello negro largo, ojos grises, cicatriz en la mejilla, complexión atlética..." style="background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.6rem 0.75rem;border-radius:4px;font-size:0.9rem;font-family:'Lora',serif;resize:vertical"></textarea></div>
+        <div class="input-group">
+            <label>👗 Ropa y equipo inicial</label>
+            <p style="font-size:0.75rem;color:var(--text-muted);margin:0.25rem 0 0.5rem">Elige tu clase primero — aparecerá una sugerencia. Puedes editarla.</p>
+            <div style="display:grid;gap:0.4rem">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">👘 Ropa:</span>
+                    <input type="text" id="outfitRopa" placeholder="Ej: túnica de viajero, capa marrón..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">⚔️ Arma:</span>
+                    <input type="text" id="outfitArma" placeholder="Ej: espada de una mano, arco largo..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">🛡️ Mano 2:</span>
+                    <input type="text" id="outfitOffhand" placeholder="Ej: escudo, segunda daga..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="min-width:80px;font-size:0.78rem;color:var(--text-muted)">💍 Accesorio:</span>
+                    <input type="text" id="outfitAccesorio" placeholder="Ej: amuleto, bolsa de hierbas..." style="flex:1;background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.4rem 0.6rem;border-radius:4px;font-size:0.82rem;font-family:'Lora',serif">
+                </div>
+            </div>
+        </div>
+        <div class="input-group"><label>Estadísticas</label><button class="btn" id="rollStatsBtn" style="margin-top:0.25rem">🎲 Tirar Dados</button><div id="statsDisplay" style="margin-top:0.5rem;font-size:0.8rem;color:var(--text-muted);text-align:center"></div></div>
+        <button class="btn" id="createCharBtn" disabled>⚔️ Continuar</button>
+        <button class="btn" id="backToHubBtn" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);margin-top:0.5rem">← Volver</button>
+    </div>`;
+}
+
+function renderAdventureSelectionScreen() {
+    const cards = ADVENTURES.map(adv => `
+        <div class="adv-card" data-id="${adv.id}" style="background:${adv.gradient}">
+            <div class="adv-emoji">${adv.emoji}</div>
+            <div class="adv-info">
+                <div class="adv-title">${adv.title}</div>
+                <div class="adv-tags">${adv.tags.map(t=>`<span class="adv-tag">${t}</span>`).join('')}</div>
+                <div class="adv-desc">${adv.description}</div>
+            </div>
+        </div>`).join('');
+    return `<div class="adv-screen">
+        <h1>Elige tu Aventura</h1>
+        <p style="text-align:center;color:var(--text-muted);margin-bottom:1rem;font-size:0.88rem">${state.character?.name} — ${state.character?.race} ${state.character?.classe}</p>
+        <div class="adv-grid">${cards}</div>
+        <div style="text-align:center;margin-top:0.75rem"><button class="btn" id="backFromAdvBtn" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);width:auto;padding:0.5rem 1.5rem;font-size:0.82rem">← Volver</button></div>
+    </div>`;
+}
+
+function renderChatScreen() {
+    return `<div class="game-wrapper">
+        <div class="status-bar">
+            <button class="menu-btn" id="menuBtn">☰</button>
+            <div>❤️ <span id="hpDisplay">${state.gameState.hp}/${state.gameState.maxHp}</span></div>
+            <div>📍 <span id="locationDisplay">${state.gameState.location}</span></div>
+            <div>🌙 <span id="timeDisplay">${state.gameState.timeOfDay}</span></div>
+            <div>🎒 <span id="inventoryDisplay">${state.gameState.inventory.join(', ')||'Vacío'}</span></div>
+            <div>⚔️ <span id="levelDisplay">Nivel 1 (0/100 XP)</span></div>
+        </div>
+        <div id="menuModal" class="modal hidden"><div class="modal-box">
+            <div class="modal-title">Menú — ${state.character?.name}</div>
+            <button class="modal-btn" id="partyMenuBtn">👥 Party & Compañeros</button>
+            <button class="modal-btn" id="npcMenuBtn">🎭 Personajes Conocidos</button>
+            <button class="modal-btn" id="newAdventureBtn">🗺️ Nueva Aventura (mismo personaje)</button>
+            <button class="modal-btn" id="switchCharBtn">🔄 Cambiar Personaje</button>
+            <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
+            <button class="modal-btn" id="knowledgeMenuBtn">📖 Conocimientos y Habilidades</button>
+            <button class="modal-btn" id="viewLegacyBtn">📜 Ver Legado del Mundo</button>
+            <button class="modal-btn" id="viewMemoryBtn">🧠 Ver Memoria de la Historia</button>
+            <button class="modal-btn" id="logoutBtn">🚪 Cerrar Sesión</button>
+            <button class="modal-btn danger" id="closeMenuBtn">✕ Cerrar</button>
+        </div></div>
+        <div id="inventoryModal" class="modal hidden"><div class="modal-box" style="max-width:520px">
+            <div class="modal-title">🎒 Inventario</div>
+            <div class="equipped-slots" id="equippedSlots"></div>
+            <div style="margin:0.5rem 0;font-size:0.75rem;color:var(--text-muted);font-family:'Cinzel',serif;letter-spacing:0.05em">MOCHILA</div>
+            <div id="inventoryList" class="inv-list"></div>
+            <button class="modal-btn" id="closeInvBtn" style="margin-top:0.5rem">✓ Cerrar</button>
+        </div></div>
+        <div id="knowledgeModal" class="modal hidden">
+            <div class="modal-box" style="max-width:520px;max-height:80vh;overflow-y:auto">
+                <div class="modal-title">📖 Conocimientos y Habilidades</div>
+                <div id="knowledgeModalContent"></div>
+                <button class="modal-btn" id="closeKnowledgeBtn" style="margin-top:0.75rem">✓ Cerrar</button>
+            </div>
+        </div>
+        <div id="legacyModal" class="modal hidden"><div class="modal-box" style="max-width:480px">
+            <div class="modal-title">📜 Legado del Mundo</div>
+            <div id="legacyList" class="legacy-modal-list"></div>
+            <button class="modal-btn" id="closeLegacyBtn" style="margin-top:0.5rem">✓ Cerrar</button>
+        </div></div>
+        <div id="memoryModal" class="modal hidden"><div class="modal-box" style="max-width:520px;max-height:80vh;overflow-y:auto">
+            <div class="modal-title">🧠 Memoria de la Historia</div>
+            <div id="memoryModalContent" style="font-size:0.82rem;color:var(--text-muted);line-height:1.7"></div>
+            <button class="modal-btn" id="closeMemoryBtn" style="margin-top:0.75rem">✓ Cerrar</button>
+        </div></div>
+        <div id="deathModal" class="modal hidden"><div class="modal-box" style="text-align:center">
+            <div style="font-size:3rem;margin-bottom:0.5rem">💀</div>
+            <div class="modal-title" style="color:#e05555">Tu personaje ha caído</div>
+            <div id="deathNote" style="font-size:0.88rem;color:var(--text-muted);margin:0.75rem 0;line-height:1.6"></div>
+            <div style="font-size:0.78rem;color:var(--accent);margin-bottom:0.75rem">Su historia quedará grabada en el mundo para siempre.</div>
+            <button class="modal-btn" id="deathContinueBtn">Ver el legado y volver</button>
+        </div></div>
+        <div id="companionChatModal" class="modal hidden">
+            <div class="modal-box companion-chat-box">
+                <div class="companion-chat-header" id="companionChatHeader">
+                    <div class="companion-chat-portrait-wrap">
+                        <img id="companionChatPortrait" src="" class="companion-chat-portrait" loading="lazy">
+                    </div>
+                    <div class="companion-chat-title-wrap">
+                        <div class="companion-chat-name" id="companionChatName"></div>
+                        <div class="companion-chat-role" id="companionChatRole"></div>
+                    </div>
+                    <button class="companion-chat-close" id="closeCompanionChatBtn">✕</button>
+                </div>
+                <div class="companion-chat-messages" id="companionChatMessages"></div>
+                <div class="companion-chat-input-row">
+                    <input type="text" id="companionChatInput" placeholder="Habla con este personaje..." class="inv-input">
+                    <button class="modal-btn small" id="companionChatSendBtn">Enviar</button>
+                </div>
+            </div>
+        </div>
+        <div id="partyModal" class="modal hidden">
+            <div class="modal-box party-modal-box">
+                <div class="modal-title">👥 Party</div>
+                <div id="partyModalContent"></div>
+                <button class="modal-btn" id="closePartyModalBtn" style="margin-top:0.5rem">✕ Cerrar</button>
+            </div>
+        </div>
+        <div id="npcModal" class="modal hidden">
+            <div class="modal-box npc-modal-box">
+                <div class="modal-title">🎭 Personajes Conocidos</div>
+                <div id="npcModalContent"></div>
+                <button class="modal-btn" id="closeNpcModalBtn" style="margin-top:0.5rem">✕ Cerrar</button>
+            </div>
+        </div>
+        <div class="game-layout">
+            <div class="chat-area">
+                <div class="chat-container" id="chatContainer"></div>
+                <div class="input-area">
+                    <input type="text" id="playerInput" placeholder="¿Qué haces?" autocomplete="off">
+                    <button class="btn" id="sendBtn">Enviar</button>
+                </div>
+                <div class="memory-bar">
+                    <span id="memoryIndicator" style="cursor:pointer" onclick="openMemoryModal()">💬 0 turnos en memoria</span>
+                </div>
+            </div>
+            <aside class="party-panel" id="partyPanel"></aside>
+        </div>
+    </div>`;
+}
+
+
+// ===================== FIREBASE SCREENS =====================
+function renderFirebaseSetupScreen() {
+    return `<div class="container">
+        <h1>Rurik Tavern</h1>
+        <p style="text-align:center;color:var(--text-muted);margin-bottom:1rem;font-size:0.88rem">Configura Firebase para sincronizar personajes entre dispositivos.</p>
+        <div style="background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1.25rem;font-size:0.82rem;color:var(--text-muted);line-height:1.9">
+            <strong style="color:var(--accent)">Configuración inicial (5 min, gratis):</strong><br>
+            1. Ve a <strong style="color:#fff">console.firebase.google.com</strong><br>
+            2. Crea un proyecto → agrega una <strong style="color:#fff">app web</strong><br>
+            3. Copia el objeto <strong style="color:#fff">firebaseConfig</strong><br>
+            4. En Authentication → Sign-in method → activa <strong style="color:#fff">Email/Contraseña</strong><br>
+            5. En Firestore Database → crea base de datos (modo prueba)
+        </div>
+        <div class="input-group">
+            <label>Pega tu firebaseConfig (JSON)</label>
+            <textarea id="fbConfigInput" rows="7" placeholder='{"apiKey":"AIza...","authDomain":"tu-proyecto.firebaseapp.com","projectId":"tu-proyecto","storageBucket":"tu-proyecto.appspot.com","messagingSenderId":"123...","appId":"1:123..."}' style="background:var(--input-bg);border:1px solid var(--border);color:var(--input-text);padding:0.6rem 0.75rem;border-radius:4px;font-size:0.75rem;font-family:monospace;resize:vertical;width:100%;box-sizing:border-box"></textarea>
+        </div>
+        <button class="btn" id="fbSetupBtn">Conectar Firebase</button>
+        <div id="fbSetupError" style="color:#e05555;font-size:0.82rem;text-align:center;margin-top:0.5rem;display:none"></div>
+    </div>`;
+}
+
+function renderAuthScreen() {
+    return `<div class="container">
+        <h1>Rurik Tavern</h1>
+        <div style="display:flex;gap:0.5rem;margin-bottom:1.25rem">
+            <button class="btn" id="tabLogin" style="flex:1">Iniciar Sesión</button>
+            <button class="btn" id="tabRegister" style="flex:1;background:transparent;border:1px solid var(--border);color:var(--text-muted)">Registrarse</button>
+        </div>
+        <div id="authLoginForm">
+            <div class="input-group"><label>Email</label><input type="email" id="loginEmail" placeholder="tu@email.com" autocomplete="email"></div>
+            <div class="input-group"><label>Contraseña</label><input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password"></div>
+            <button class="btn" id="loginBtn">Entrar</button>
+        </div>
+        <div id="authRegisterForm" style="display:none">
+            <div class="input-group"><label>Email</label><input type="email" id="regEmail" placeholder="tu@email.com" autocomplete="email"></div>
+            <div class="input-group"><label>Contraseña (mín. 6 caracteres)</label><input type="password" id="regPassword" placeholder="••••••••" autocomplete="new-password"></div>
+            <button class="btn" id="registerBtn">Crear Cuenta</button>
+        </div>
+        <div id="authError" style="color:#e05555;font-size:0.82rem;text-align:center;margin-top:0.5rem;display:none"></div>
+        <button id="resetFbBtn" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;margin-top:1.5rem;display:block;text-align:center;width:100%">Cambiar configuración Firebase</button>
+    </div>`;
+}
+
+function bindFirebaseSetupScreen() {
+    document.getElementById('fbSetupBtn').addEventListener('click', () => {
+        const raw = document.getElementById('fbConfigInput').value.trim();
+        const errEl = document.getElementById('fbSetupError');
+        errEl.style.display = 'none';
+        let config;
+        try {
+            // Accept both raw JS object notation and JSON
+            config = JSON.parse(raw.replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'));
+            if (!config.apiKey || !config.projectId) throw new Error('Faltan campos');
+        } catch(e) {
+            errEl.textContent = 'JSON inválido. Asegúrate de copiar el objeto completo.';
+            errEl.style.display = 'block';
+            return;
+        }
+        try {
+            localStorage.setItem('fbConfig', JSON.stringify(config));
+            initFirebase(config);
+            showScreen('auth');
+        } catch(e) {
+            errEl.textContent = 'Error al inicializar Firebase: ' + e.message;
+            errEl.style.display = 'block';
+        }
+    });
+}
+
+function bindAuthScreen() {
+    const errEl = document.getElementById('authError');
+    const loginForm = document.getElementById('authLoginForm');
+    const regForm = document.getElementById('authRegisterForm');
+
+    document.getElementById('tabLogin').addEventListener('click', () => {
+        loginForm.style.display = ''; regForm.style.display = 'none';
+        document.getElementById('tabLogin').style.cssText = 'flex:1';
+        document.getElementById('tabRegister').style.cssText = 'flex:1;background:transparent;border:1px solid var(--border);color:var(--text-muted)';
+    });
+    document.getElementById('tabRegister').addEventListener('click', () => {
+        loginForm.style.display = 'none'; regForm.style.display = '';
+        document.getElementById('tabRegister').style.cssText = 'flex:1';
+        document.getElementById('tabLogin').style.cssText = 'flex:1;background:transparent;border:1px solid var(--border);color:var(--text-muted)';
+    });
+
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+        const email = document.getElementById('loginEmail').value.trim();
+        const pass = document.getElementById('loginPassword').value;
+        errEl.style.display = 'none';
+        try {
+            const cred = await fbAuth.signInWithEmailAndPassword(email, pass);
+            fbUser = cred.user;
+            const loadingEl = document.createElement('div');
+            loadingEl.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0d0a07;color:#c9a84c;font-family:Cinzel,serif;font-size:1rem;letter-spacing:0.1em';
+            loadingEl.textContent = 'Cargando personajes...';
+            document.body.appendChild(loadingEl);
+            await syncFromFirestore();
+            loadingEl.remove();
+            state.apiKey = localStorage.getItem('groqApiKey');
+            if (!state.apiKey) { showScreen('apiKey'); return; }
+            migrateOldData();
+            showScreen('characterHub');
+        } catch(e) {
+            const msgs = { 'auth/user-not-found':'Usuario no encontrado.', 'auth/wrong-password':'Contraseña incorrecta.', 'auth/invalid-email':'Email inválido.', 'auth/invalid-credential':'Email o contraseña incorrectos.' };
+            errEl.textContent = msgs[e.code] || e.message;
+            errEl.style.display = 'block';
+        }
+    });
+
+    document.getElementById('registerBtn').addEventListener('click', async () => {
+        const email = document.getElementById('regEmail').value.trim();
+        const pass = document.getElementById('regPassword').value;
+        errEl.style.display = 'none';
+        try {
+            const cred = await fbAuth.createUserWithEmailAndPassword(email, pass);
+            fbUser = cred.user;
+            state.apiKey = localStorage.getItem('groqApiKey');
+            if (!state.apiKey) { showScreen('apiKey'); return; }
+            showScreen('characterHub');
+        } catch(e) {
+            const msgs = { 'auth/email-already-in-use':'Este email ya está registrado.', 'auth/weak-password':'La contraseña debe tener al menos 6 caracteres.', 'auth/invalid-email':'Email inválido.' };
+            errEl.textContent = msgs[e.code] || e.message;
+            errEl.style.display = 'block';
+        }
+    });
+
+    document.getElementById('resetFbBtn').addEventListener('click', () => {
+        localStorage.removeItem('fbConfig');
+        fbApp = null; fbDb = null; fbAuth = null; fbUser = null;
+        showScreen('firebaseSetup');
+    });
+}
+
+function generateDefaultActions() {
+    const location = state.gameState.location || 'este lugar';
+    const timeOfDay = state.gameState.timeOfDay || 'momento actual';
+
+    // Intentar obtener nombre de compañero si está disponible
+    let companionName = null;
+    if (state.gameState.companions && state.gameState.companions.length > 0) {
+        companionName = state.gameState.companions[0].name;
+    }
+
+    // Intentar obtener nombre de NPC de relaciones si está disponible
+    let npcName = null;
+    if (state.gameState.relationships) {
+        for (const [name, rel] of Object.entries(state.gameState.relationships)) {
+            if (rel.level > 0) { // relación positiva
+                npcName = name;
+                break;
+            }
+        }
+    }
+
+    // Construir tres acciones predeterminadas
+    const actions = [];
+
+    // Acción 1: Interacción social
+    if (companionName) {
+        actions.push(`Hablar con ${companionName}`);
+    } else if (npcName) {
+        actions.push(`Acercarse a ${npcName}`);
+    } else {
+        actions.push(`Hablar con alguien en ${location}`);
+    }
+
+    // Acción 2: Exploración
+    actions.push(`Explorar los alrededores de ${location}`);
+
+    // Acción 3: Observación o verificación de estado
+    actions.push(`Observar con atención lo que sucede`);
+
+    // Asegurar que tengamos exactamente tres acciones
+    return actions.slice(0, 3);
+}
+
+// ===================== BINDINGS =====================
+function bindApiKeyScreen() {
+    document.getElementById('saveApiKeyBtn').addEventListener('click', () => {
+        const key = document.getElementById('apiKeyInput').value.trim();
+        if (key) { state.apiKey = key; localStorage.setItem('groqApiKey', key); showScreen('characterHub'); }
+    });
+}
+
+function bindCharacterHub() {
+    document.getElementById('newCharBtn').addEventListener('click', () => showScreen('characterCreation'));
+    document.querySelectorAll('.char-delete-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const char = getCharData(id);
+            if (!char) return;
+            const modal = document.getElementById('deleteModal');
+            document.getElementById('deleteModalText').textContent = `¿Eliminar a "${char.name}" (${char.race} ${char.classe})? Esta acción es irreversible.`;
+            const input = document.getElementById('deleteConfirmInput');
+            const confirmBtn = document.getElementById('deleteConfirmBtn');
+            input.value = '';
+            confirmBtn.disabled = true;
+            input.oninput = () => { confirmBtn.disabled = input.value.trim().toLowerCase() !== 'confirmar'; };
+            confirmBtn.onclick = () => {
+                const chars = getAllCharacters().filter(c => c.id !== id);
+                saveAllCharacters(chars);
+                localStorage.removeItem('dndGameState_' + id);
+                localStorage.removeItem('dndChatHistory_' + id);
+                localStorage.removeItem('dndAdventure_' + id);
+                fsDeleteCharacter(id);
+                modal.classList.add('hidden');
+                showScreen('characterHub');
+            };
+            document.getElementById('deleteCancelBtn').onclick = () => modal.classList.add('hidden');
+            modal.classList.remove('hidden');
+        });
+    });
+    document.querySelectorAll('.char-card:not(.new-char):not(.dead)').forEach(card => {
+        card.addEventListener('click', () => {
+            const id = card.dataset.id;
+            loadCharacter(id);
+            if (!state.adventure && state.chatHistory.length === 0) showScreen('adventureSelection');
+            else showScreen('chat');
+        });
+    });
+}
+
+function bindCharacterCreation() {
+    const nameInput = document.getElementById('charName');
+    const raceSelect = document.getElementById('charRace');
+    const classSelect = document.getElementById('charClass');
+    const bgSelect = document.getElementById('charBackground');
+    const rollBtn = document.getElementById('rollStatsBtn');
+    const statsDisplay = document.getElementById('statsDisplay');
+    const createBtn = document.getElementById('createCharBtn');
+
+    function checkValidity() { createBtn.disabled = !(nameInput.value.trim() && raceSelect.value && classSelect.value && bgSelect.value && state.tempStats); }
+    rollBtn.addEventListener('click', () => {
+        const stats = {};
+        ['FUE','DES','CON','INT','SAB','CAR'].forEach(ab => {
+            const rolls = [1,2,3,4].map(()=>Math.floor(Math.random()*6)+1).sort((a,b)=>a-b).slice(1);
+            stats[ab] = rolls.reduce((a,b)=>a+b,0);
+        });
+        state.tempStats = stats;
+        statsDisplay.textContent = Object.entries(stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `${ab} ${v} (${m>=0?'+':''}${m})`;}).join(' · ');
+        checkValidity();
+    });
+    // Auto-fill outfit when class is selected
+    classSelect.addEventListener('change', () => {
+        const cls = classSelect.value;
+        const defaults = CLASS_DEFAULT_OUTFIT[cls];
+        if (defaults) {
+            const ropa = document.getElementById('outfitRopa');
+            const arma = document.getElementById('outfitArma');
+            const offhand = document.getElementById('outfitOffhand');
+            const accesorio = document.getElementById('outfitAccesorio');
+            if (ropa && !ropa.value) ropa.value = defaults.ropa;
+            if (arma && !arma.value) arma.value = defaults.arma;
+            if (offhand && !offhand.value) offhand.value = defaults.offhand;
+            if (accesorio && !accesorio.value) accesorio.value = defaults.accesorio;
+        }
+        checkValidity();
+    });
+    [nameInput,raceSelect,bgSelect].forEach(el=>el.addEventListener('input',checkValidity));
+    document.getElementById('backToHubBtn').addEventListener('click', () => showScreen('characterHub'));
+    createBtn.addEventListener('click', () => {
+        const id = generateId();
+        const conMod = Math.floor((state.tempStats.CON-10)/2);
+        const cls = classSelect.value;
+        const defaultOutfit = CLASS_DEFAULT_OUTFIT[cls] || { ropa:'', arma:'', offhand:'', accesorio:'' };
+        const equipped = {
+            ropa:      document.getElementById('outfitRopa')?.value.trim()      || defaultOutfit.ropa,
+            arma:      document.getElementById('outfitArma')?.value.trim()      || defaultOutfit.arma,
+            offhand:   document.getElementById('outfitOffhand')?.value.trim()   || defaultOutfit.offhand,
+            accesorio: document.getElementById('outfitAccesorio')?.value.trim() || defaultOutfit.accesorio
+        };
+        const char = {
+            id, name: nameInput.value.trim(), race: raceSelect.value, classe: cls,
+            background: bgSelect.value, motivation: document.getElementById('charMotivation').value.trim(),
+            gender: document.getElementById('charGender').value,
+            appearance: document.getElementById('charAppearance').value.trim(),
+            portraitSeed: Math.floor(Math.random() * 99999),
+            stats: state.tempStats, status:'alive', created: new Date().toISOString().slice(0,10),
+            experience: 0, level: 1, skillPoints: 0
+        };
+        updateCharData(char);
+        state.activeCharId = id;
+        setActiveCharId(id);
+        state.character = char;
+        const startingKnowledge = CLASS_STARTING_KNOWLEDGE[char.classe] || { knowledges:[], learnedAbilities:[] };
+        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], knowledges: startingKnowledge.knowledges.map(k=>({...k})), learnedAbilities: startingKnowledge.learnedAbilities.map(a=>({...a})), skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'', equipped };
+        Object.assign(state.gameState, gs);
+        state.chatHistory = [];
+        state.adventure = null;
+        showScreen('adventureSelection');
+    });
+}
+
+function bindAdventureSelection() {
+    document.getElementById('backFromAdvBtn').addEventListener('click', () => showScreen('characterHub'));
+    document.querySelectorAll('.adv-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const adv = ADVENTURES.find(a => a.id === card.dataset.id);
+            state.adventure = adv;
+            state.gameState.location = adv.location;
+            state.gameState.quest = adv.id==='free' ? 'Aventura libre' : adv.description;
+            state.chatHistory = [];
+            saveAdventureFor(state.activeCharId, adv);
+            saveGameStateFor(state.activeCharId, state.gameState);
+            showScreen('chat');
+            const char = state.character;
+            const worldEvents = getEventsForLocation(adv.location);
+            const worldNote = worldEvents.length > 0 ? `\n\n${worldEvents.map(e=>`Nota del narrador: ${e.event}`).join('\n')}` : '';
+            const opener = adv.startScene
+                ? `${adv.startScene}${worldNote}\n\nTú eres ${char.name}, ${char.race} ${char.classe}${char.motivation?', '+char.motivation:''}.\n\n¿Qué haces?`
+                : `${adv.location} te recibe. Tú eres ${char.name}, ${char.race} ${char.classe}${char.motivation?', '+char.motivation:''}.\n\n¿Qué haces?`;
+            addDMMessage(opener, ['Hablar con el tabernero','Explorar el lugar','Buscar una mesa y observar']);
+        });
+    });
+}
+
+function renderNpcModalContent() {
+    const container = document.getElementById('npcModalContent');
+    if (!container) return;
+    const npcs = state.gameState.npcs || [];
+    if (npcs.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-muted);text-align:center;font-size:0.85rem;padding:1rem">Todavia no has conocido a nadie reseniable.<br>Los personajes importantes apareceran aqui automaticamente.</p>';
+        return;
+    }
+    container.innerHTML = npcs.map((npc, idx) => {
+        const tier = getNpcRelTier(npc.relationship);
+        const facts = (npc.knownFacts||[]).map(f=>`<li>${f}</li>`).join('');
+        const good  = (npc.goodMemories||[]).map(f=>`<li>${f}</li>`).join('');
+        const bad   = (npc.badMemories||[]).map(f=>`<li>${f}</li>`).join('');
+        const portraitSrc = npc.portrait || '';
+        return `<div class="npc-card" id="npc-card-${idx}">
+            <div class="npc-card-header">
+                ${portraitSrc ? `<img class="npc-portrait" src="${portraitSrc}" loading="lazy">` : '<div class="npc-portrait npc-portrait-placeholder">?</div>'}
+                <div class="npc-card-info">
+                    <div class="npc-name">${npc.name}</div>
+                    <div class="npc-subt">${[npc.race,npc.role].filter(Boolean).join(' · ')}</div>
+                    <div class="npc-rel-badge" style="background:${tier.color}22;border:1px solid ${tier.color};color:${tier.color}">${tier.emoji} ${tier.label}</div>
+                    ${(npc.maxRelationship !== undefined && npc.maxRelationship < 5) ? `<div class="npc-cap-label">techo: ${getNpcRelTier(npc.maxRelationship).emoji} ${getNpcRelTier(npc.maxRelationship).label}</div>` : ''}
+                    ${npc.biases && npc.biases.length ? `<div class="npc-biases">${npc.biases.join(' · ')}</div>` : ''}
+                    ${npc.lastSeen ? `<div class="npc-lastseen">Visto en: ${npc.lastSeen}</div>` : ''}
+                </div>
+                <div class="npc-card-actions">
+                    <button class="npc-btn" title="Regenerar retrato" onclick="regenNpcPortrait(${idx})">&#128260;</button>
+                    <button class="npc-btn npc-del" title="Eliminar" onclick="deleteNpc(${idx})">&#128465;</button>
+                </div>
+            </div>
+            ${facts ? `<details class="npc-section"><summary>Lo que sabes</summary><ul class="npc-list">${facts}</ul></details>` : ''}
+            ${good  ? `<details class="npc-section"><summary>Buenos recuerdos</summary><ul class="npc-list">${good}</ul></details>` : ''}
+            ${bad   ? `<details class="npc-section"><summary>Conflictos</summary><ul class="npc-list">${bad}</ul></details>` : ''}
+            <details class="npc-section"><summary>Notas libres</summary>
+                <textarea class="npc-notes-input" placeholder="Notas sobre ${npc.name}..." oninput="saveNpcNotes(${idx},this.value)">${npc.notes||''}</textarea>
+            </details>
+        </div>`;
+    }).join('');
+}
+
+function openNpcModal() {
+    renderNpcModalContent();
+    document.getElementById('npcModal').classList.remove('hidden');
+}
+
+window.adjustNpcRel = function(idx, delta) {
+    const npc = state.gameState.npcs[idx];
+    if (!npc) return;
+    npc.relationship = Math.max(-3, Math.min(5, npc.relationship + delta));
+    npc.relationshipLabel = getNpcRelTier(npc.relationship).label;
+    fsSaveGameState(state.activeCharId);
+    renderNpcModalContent();
+};
+
+window.regenNpcPortrait = function(idx) {
+    const npc = state.gameState.npcs[idx];
+    if (!npc) return;
+    npc.portrait = null;
+    generateNpcPortrait(npc);
+};
+
+window.deleteNpc = function(idx) {
+    if (!confirm('Eliminar este personaje del registro?')) return;
+    state.gameState.npcs.splice(idx, 1);
+    fsSaveGameState(state.activeCharId);
+    renderNpcModalContent();
+};
+
+window.saveNpcNotes = function(idx, text) {
+    if (state.gameState.npcs[idx]) { state.gameState.npcs[idx].notes = text; fsSaveGameState(state.activeCharId); }
+};
+
+
+function bindChat() {
+    const playerInput = document.getElementById('playerInput');
+    const sendBtn = document.getElementById('sendBtn');
+    renderChat(); updatePartyPanel(); updateStatus(); updateMemoryIndicator();
+    playerInput.focus();
+
+    async function sendMessage() {
+        const action = playerInput.value.trim();
+        if (!action) return;
+
+        // Handle /asignar command for skill point allocation
+        if (action.startsWith('/asignar')) {
+            const parts = action.split(' ');
+            if (parts.length !== 3) {
+                addDMMessage('Uso correcto: /asignar <estadistica> <puntos>\nEjemplo: /asignar FUE 2\nEstadísticas disponibles: FUE, DES, CON, INT, SAB, CAR');
+                playerInput.value = '';
+                return;
+            }
+
+            const stat = parts[1].toUpperCase();
+            const points = parseInt(parts[2]);
+
+            if (isNaN(points) || points <= 0) {
+                addDMMessage('Los puntos deben ser un número positivo.');
+                playerInput.value = '';
+                return;
+            }
+
+            const validStats = ['FUE', 'DES', 'CON', 'INT', 'SAB', 'CAR'];
+            if (!validStats.includes(stat)) {
+                addDMMessage('Estadística no válida. Use: FUE, DES, CON, INT, SAB o CAR.');
+                playerInput.value = '';
+                return;
+            }
+
+            if (state.character.skillPoints < points) {
+                addDMMessage(`No tienes suficientes puntos de habilidad. Disponibles: ${state.character.skillPoints}`);
+                playerInput.value = '';
+                return;
+            }
+
+            // Apply the points to the selected stat
+            state.character.stats[stat] += points;
+            state.character.skillPoints -= points;
+
+            // Check for class evolution after increasing stats
+            updateClassEvolution();
+
+            // Update max HP if CON was increased
+            if (stat === 'CON') {
+                const conMod = Math.floor((state.character.stats.CON - 10) / 2);
+                state.gameState.maxHp = 10 + conMod;
+                if (state.gameState.hp > state.gameState.maxHp) {
+                    state.gameState.hp = state.gameState.maxHp;
+                }
+            }
+
+            addDMMessage(`Has asignado ${points} punto(s) a ${stat}. Nueva estadística: ${stat} ${state.character.stats[stat]} (${Math.floor((state.character.stats[stat]-10)/2)>=0?'+':''}${Math.floor((state.character.stats[stat]-10)/2)})`);
+            updateStatus();
+            updatePartyPanel();
+            saveGameStateFor(state.activeCharId, state.gameState);
+            playerInput.value = '';
+            return;
+        }
+
+        // Clear input immediately so user can prepare next action
+        playerInput.value = '';
+        state.pendingRoll = null; // clear any stale roll
+
+        // Check if action requires a roll BEFORE sending to AI
+        const suggestedRoll = guessRequiredRoll(action);
+        if (suggestedRoll) {
+            // We know a roll is needed, so set up pending roll immediately
+            const statVal = state.character?.stats[suggestedRoll.stat] || 10;
+            state.pendingRoll = {
+                trigger: suggestedRoll,
+                statValue: statVal
+            };
+            // Disable input while waiting for roll
+            playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...';
+            addPlayerMessage(action, null, 'pending', state.chatHistory.length); // Show roll button immediately
+            // Don't call AI yet - wait for user to roll first
+            return;
+        }
+
+        // If no roll needed, proceed normally
+        playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...';
+        addPlayerMessage(action, null, 'done', state.chatHistory.length);
+        await callAndRespond(action, null);
+    }
+
+    // Use touchend on mobile for instant response, click as fallback
+    let touchFired = false;
+    sendBtn.addEventListener('touchend', e => {
+        e.preventDefault();
+        touchFired = true;
+        sendMessage();
+        setTimeout(() => { touchFired = false; }, 500);
+    });
+    sendBtn.addEventListener('click', () => { if (!touchFired) sendMessage(); });
+    playerInput.addEventListener('keypress', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+
+    // Menu
+    document.getElementById('menuBtn').addEventListener('click', () => document.getElementById('menuModal').classList.toggle('hidden'));
+    document.getElementById('closeMenuBtn').addEventListener('click', () => document.getElementById('menuModal').classList.add('hidden'));
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+        if (!confirm('¿Cerrar sesión?')) return;
+        try { await fbAuth.signOut(); } catch(e) {}
+        fbUser = null;
+        showScreen('auth');
+    });
+    document.getElementById('partyMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden');
+        openPartyModal();
+    });
+    document.getElementById('closePartyModalBtn').addEventListener('click', () => {
+        document.getElementById('partyModal').classList.add('hidden');
+    });
+    document.getElementById('npcMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden');
+        openNpcModal();
+    });
+    document.getElementById('closeNpcModalBtn').addEventListener('click', () => {
+        document.getElementById('npcModal').classList.add('hidden');
+    });
+    document.getElementById('switchCharBtn').addEventListener('click', () => { document.getElementById('menuModal').classList.add('hidden'); showScreen('characterHub'); });
+    document.getElementById('newAdventureBtn').addEventListener('click', () => {
+        state.chatHistory = []; state.adventure = null;
+        state.gameState.companions = []; state.gameState.relationships = {}; state.gameState.summary = '';
+        saveChatHistoryFor(state.activeCharId, []); saveAdventureFor(state.activeCharId, null);
+        document.getElementById('menuModal').classList.add('hidden');
+        showScreen('adventureSelection');
+    });
+    document.getElementById('manageInventoryBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden'); openInventoryModal();
+    });
+    document.getElementById('knowledgeMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden'); openKnowledgeModal();
+    });
+    document.getElementById('closeKnowledgeBtn').addEventListener('click', () => {
+        document.getElementById('knowledgeModal').classList.add('hidden');
+    });
+    document.getElementById('viewLegacyBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden'); openLegacyModal();
+    });
+    document.getElementById('viewMemoryBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden'); openMemoryModal();
+    });
+
+    // Inventory
+    document.getElementById('closeInvBtn').addEventListener('click', () => document.getElementById('inventoryModal').classList.add('hidden'));
+
+    // Legacy
+    document.getElementById('closeLegacyBtn').addEventListener('click', () => document.getElementById('legacyModal').classList.add('hidden'));
+
+    // Memory
+    document.getElementById('closeMemoryBtn').addEventListener('click', () => document.getElementById('memoryModal').classList.add('hidden'));
+
+    // Companion chat
+    document.getElementById('closeCompanionChatBtn').addEventListener('click', () => document.getElementById('companionChatModal').classList.add('hidden'));
+    document.getElementById('companionChatSendBtn').addEventListener('click', sendCompanionMessage);
+    document.getElementById('companionChatInput').addEventListener('keypress', e => { if (e.key==='Enter') sendCompanionMessage(); });
+
+    // Death
+    document.getElementById('deathContinueBtn').addEventListener('click', () => {
+        document.getElementById('deathModal').classList.add('hidden');
+        showScreen('characterHub');
+    });
+}
+
+// ===================== MODALS =====================
+// ===================== COMPANION CHAT =====================
+const companionChats = {};
+let activeChatCompanion = null;
+
+window.openCompanionChat = function(companionName) {
+    activeChatCompanion = companionName;
+    const companion = (state.gameState.companions||[]).find(c=>c.name===companionName);
+    if (!companion) return;
+    document.getElementById('companionChatName').textContent = companion.name;
+    document.getElementById('companionChatRole').textContent = companion.role || '';
+    document.getElementById('companionChatPortrait').src = getCompanionPortraitUrl(companion, 120);
+    if (!companionChats[companionName]) companionChats[companionName] = [];
+    renderCompanionChat();
+    document.getElementById('companionChatModal').classList.remove('hidden');
+    document.getElementById('companionChatInput').focus();
+};
+
+function renderCompanionChat() {
+    const msgs = companionChats[activeChatCompanion] || [];
+    const el = document.getElementById('companionChatMessages');
+    if (!el) return;
+    el.innerHTML = msgs.length === 0
+        ? `<div class="cc-empty">Di algo para iniciar la conversación</div>`
+        : msgs.map(m => `<div class="cc-msg cc-${m.role}"><span class="cc-bubble">${m.content}</span></div>`).join('');
+    el.scrollTop = el.scrollHeight;
+}
+
+async function sendCompanionMessage() {
+    const input = document.getElementById('companionChatInput');
+    const text = input.value.trim();
+    if (!text || !activeChatCompanion) return;
+    input.value = '';
+    if (!companionChats[activeChatCompanion]) companionChats[activeChatCompanion] = [];
+    companionChats[activeChatCompanion].push({ role:'player', content: text });
+    renderCompanionChat();
+    const sendBtn = document.getElementById('companionChatSendBtn');
+    sendBtn.disabled = true; sendBtn.textContent = '...';
+    try {
+        const companion = (state.gameState.companions||[]).find(c=>c.name===activeChatCompanion);
+        const rel = state.gameState.relationships?.[activeChatCompanion];
+        const char = state.character;
+        const recentHistory = companionChats[activeChatCompanion].slice(-10).map(m=>`${m.role==='player'?char.name:companion.name}: ${m.content}`).join('\n');
+        const system = `Eres ${companion.name}${companion.role?', '+companion.role:''}. ${companion.description||''}\nEstás en ${state.gameState.location} junto a ${char.name}, ${char.race} ${char.classe}.\nTu relación con ${char.name}: ${rel?.type||'neutral'} (nivel ${rel?.level||0}/5).\nResponde en primera persona, en character, de forma natural y concisa (1-4 frases). Habla en el mismo idioma que ${char.name}.`;
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method:'POST',
+            headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
+            body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:[{role:'system',content:system},{role:'user',content:recentHistory+'\n'+char.name+': '+text}], temperature:0.85, max_tokens:200 })
+        });
+        const data = await response.json();
+        const reply = data.choices[0].message.content.trim().replace(/^[^:]+:\s*/,'');
+        companionChats[activeChatCompanion].push({ role:'companion', content: reply });
+        renderCompanionChat();
+    } catch(e) {
+        console.warn('Error en chat de compañero:', e);
+        // Mensaje temático pero más informativo
+        companionChats[activeChatCompanion].push({ role:'companion', content:'...*(El compañero parece distraído o no pudo responder en este momento)*...' });
+        renderCompanionChat();
+    } finally {
+        sendBtn.disabled = false; sendBtn.textContent = 'Enviar';
+        document.getElementById('companionChatInput').focus();
+    }
+}
+
+function openInventoryModal() {
+    document.getElementById('inventoryModal').classList.remove('hidden');
+    renderInventoryModal();
+}
+function renderInventoryModal() {
+    const list = document.getElementById('inventoryList');
+    const slotsEl = document.getElementById('equippedSlots');
+
+    // Render equipped slots panel
+    if (slotsEl) {
+        const eq = state.gameState.equipped || {};
+        const slotDefs = [
+            { key:'ropa',      icon:'👘', label:'Ropa' },
+            { key:'arma',      icon:'⚔️', label:'Arma' },
+            { key:'offhand',   icon:'🛡️', label:'Mano 2' },
+            { key:'accesorio', icon:'💍', label:'Accesorio' }
+        ];
+        slotsEl.innerHTML = `
+            <div style="font-size:0.75rem;color:var(--text-muted);font-family:'Cinzel',serif;letter-spacing:0.05em;margin-bottom:0.4rem">EQUIPADO ACTUALMENTE</div>
+            <div class="equipped-grid">
+                ${slotDefs.map(s => `
+                    <div class="equipped-slot">
+                        <span class="slot-icon">${s.icon}</span>
+                        <div class="slot-info">
+                            <div class="slot-label">${s.label}</div>
+                            <div class="slot-value">${eq[s.key] || '<em style="color:var(--text-muted)">vacío</em>'}</div>
+                        </div>
+                        ${eq[s.key] ? `<button class="slot-unequip" onclick="unequipSlot('${s.key}')">✕</button>` : ''}
+                    </div>`).join('')}
+            </div>`;
+    }
+
+    if (!list) return;
+    list.innerHTML = state.gameState.inventory.length === 0
+        ? '<div class="inv-empty">La mochila está vacía</div>'
+        : state.gameState.inventory.map((item,i) => {
+            const itemName = typeof item === 'string' ? item : item.name;
+            const itemType = typeof item === 'string' ? 'objeto' : (item.type || 'objeto');
+            const itemRarity = typeof item === 'string' ? 'común' : (item.rarity || 'común');
+            const itemDamage = typeof item === 'string' ? null : item.damage;
+
+            // Determine which slot this item can equip to
+            let equipSlot = null;
+            if (itemType === 'arma') equipSlot = 'arma';
+            else if (itemType === 'armadura') equipSlot = 'ropa';
+            else if (['amuleto','anillo','componente'].includes(itemType) || itemName.toLowerCase().includes('amuleto') || itemName.toLowerCase().includes('collar') || itemName.toLowerCase().includes('anillo')) equipSlot = 'accesorio';
+
+            let badge = '';
+            if (itemType === 'arma' && itemDamage !== null) badge = `<span class="item-badge">d${itemDamage}</span>`;
+            else if (itemType === 'armadura') badge = `<span class="item-badge">Armadura</span>`;
+            else if (itemType === 'consumible') badge = `<span class="item-badge">Consumible</span>`;
+            else if (itemType === 'tesoro') badge = `<span class="item-badge">Tesoro</span>`;
+
+            const equipBtn = equipSlot
+                ? `<button class="inv-equip" onclick="equipItem(${i},'${equipSlot}')" title="Equipar en ${equipSlot}">↑ Equipar</button>`
+                : '';
+
+            return `<div class="inv-item">
+                <span>${itemName}</span>
+                <span class="item-info">${itemType} (${itemRarity}) ${badge}</span>
+                <div style="display:flex;gap:0.3rem;align-items:center">
+                    ${equipBtn}
+                    <button class="inv-remove" onclick="removeItem(${i})">✕</button>
+                </div>
+            </div>`;
+        }).join('');
+}
+
+window.equipItem = function(idx, slot) {
+    const item = state.gameState.inventory[idx];
+    if (!item) return;
+    const itemName = typeof item === 'string' ? item : item.name;
+    if (!state.gameState.equipped) state.gameState.equipped = {};
+    // If something was already in that slot, keep it (don't auto-add back to inventory to avoid clutter)
+    state.gameState.equipped[slot] = itemName;
+    // Remove from inventory
+    state.gameState.inventory.splice(idx, 1);
+    renderInventoryModal(); updateStatus();
+    saveGameStateFor(state.activeCharId, state.gameState);
+};
+
+window.unequipSlot = function(slot) {
+    if (!state.gameState.equipped) return;
+    const val = state.gameState.equipped[slot];
+    if (!val) return;
+    state.gameState.equipped[slot] = '';
+    // Add back to inventory as an item object
+    state.gameState.inventory.push(createItemFromName(val));
+    renderInventoryModal(); updateStatus();
+    saveGameStateFor(state.activeCharId, state.gameState);
+};
+
+window.removeItem = function(idx) {
+    state.gameState.inventory.splice(idx,1); renderInventoryModal(); updateStatus();
+    saveGameStateFor(state.activeCharId, state.gameState);
+};
+
+function openKnowledgeModal() {
+    document.getElementById('knowledgeModal').classList.remove('hidden');
+    renderKnowledgeModalContent();
+}
+
+function renderKnowledgeModalContent() {
+    const container = document.getElementById('knowledgeModalContent');
+    if (!container) return;
+    const knowledges = state.gameState.knowledges || [];
+    const abilities  = state.gameState.learnedAbilities || [];
+    const levelLabel = l => l===1 ? 'Básico' : l===2 ? 'Intermedio' : 'Avanzado';
+    const typeIcon   = t => ({ magic:'✨', lore:'📜', language:'🗣️', skill:'⚙️', craft:'🔨' }[t] || '•');
+    const catIcon    = c => ({ spell:'✨', combat:'⚔️', social:'💬', craft:'🔨', skill:'⚙️' }[c] || '•');
+
+    const knSection = knowledges.length === 0
+        ? '<div class="inv-empty">Sin conocimientos adicionales adquiridos.</div>'
+        : knowledges.map(k => `
+            <div class="npc-card" style="margin-bottom:0.5rem">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="font-size:1.1rem">${typeIcon(k.type)}</span>
+                    <div>
+                        <div style="font-weight:600;color:var(--accent)">${k.name}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">${levelLabel(k.level)}${k.source ? ' · Fuente: '+k.source : ''}</div>
+                        ${k.description ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.2rem">${k.description}</div>` : ''}
+                    </div>
+                </div>
+            </div>`).join('');
+
+    const abSection = abilities.length === 0
+        ? '<div class="inv-empty">Sin habilidades adicionales aprendidas.</div>'
+        : abilities.map(a => `
+            <div class="npc-card" style="margin-bottom:0.5rem">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span style="font-size:1.1rem">${catIcon(a.category)}</span>
+                    <div>
+                        <div style="font-weight:600;color:var(--accent)">${a.name}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">${a.category} · usa ${a.stat}${a.dcBonus ? ' · DC+'+a.dcBonus : ''}${a.source ? ' · '+a.source : ''}</div>
+                        ${a.description ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.2rem">${a.description}</div>` : ''}
+                    </div>
+                </div>
+            </div>`).join('');
+
+    container.innerHTML = `
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.75rem">
+            Todo lo que ${state.character?.name} ha aprendido a lo largo de su historia.
+        </div>
+        <div style="font-size:0.85rem;font-family:Cinzel,serif;color:var(--accent);margin-bottom:0.4rem;border-bottom:1px solid var(--border);padding-bottom:0.3rem">📚 Conocimientos</div>
+        ${knSection}
+        <div style="font-size:0.85rem;font-family:Cinzel,serif;color:var(--accent);margin:0.75rem 0 0.4rem;border-bottom:1px solid var(--border);padding-bottom:0.3rem">⚡ Habilidades Activas</div>
+        ${abSection}`;
+}
+
+function openLegacyModal() {
+    const modal = document.getElementById('legacyModal');
+    const list = document.getElementById('legacyList');
+    const ws = getWorldState();
+    list.innerHTML = ws.events.length === 0
+        ? '<div class="inv-empty">Ningún evento ha quedado grabado todavía.</div>'
+        : ws.events.slice().reverse().map(e => `
+            <div class="legacy-event-detail">
+                <div class="legacy-event-header">
+                    <span class="legacy-type ${e.type}">${e.type==='death'?'💀':e.type==='heroic'?'⚔️':e.type==='curse'?'🌑':'✦'}</span>
+                    <strong>${e.characterName}</strong> — <em>${e.location}</em>
+                    <span style="color:var(--text-muted);font-size:0.7rem;margin-left:auto">${e.date||''}</span>
+                </div>
+                <div class="legacy-event-text">${e.event}</div>
+            </div>`).join('');
+    modal.classList.remove('hidden');
+}
+
+function openMemoryModal() {
+    const modal = document.getElementById('memoryModal');
+    const content = document.getElementById('memoryModalContent');
+    const turns = state.chatHistory.length;
+    const hasLTM = !!state.gameState.longTermMemory;
+    const ltmTurn = state.gameState.longTermMemoryTurn || 0;
+
+    let html = `<div style="margin-bottom:0.75rem;padding:0.5rem 0.75rem;border-radius:6px;background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.2)">
+        <strong style="color:var(--accent)">Estado de la memoria</strong><br>
+        💬 <strong>${turns}</strong> turnos en memoria activa (conversación reciente)<br>
+        ${hasLTM
+            ? `📜 Memoria consolidada activa — generada en turno ${ltmTurn}`
+            : `⚠️ Sin memoria consolidada aún (se genera cada 10 turnos)`}
+    </div>`;
+
+    if (hasLTM) {
+        try {
+            const parsed = JSON.parse(state.gameState.longTermMemory);
+            html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">📍 Ubicación registrada</strong><br>${parsed.ubicacion_actual || '—'}</div>`;
+            html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">🎯 Razón de estar aquí</strong><br>${parsed.razon_en_ubicacion || '—'}</div>`;
+            html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">⚔️ Misión activa</strong><br>${parsed.mision_activa || '—'}</div>`;
+            if (parsed.npcs_conocidos && parsed.npcs_conocidos.length > 0) {
+                html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">🎭 NPCs registrados</strong><br>`;
+                html += parsed.npcs_conocidos.map(n =>
+                    `<div style="padding:0.3rem 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+                        <strong>${n.nombre}</strong> · ${n.rol}<br>
+                        <span style="color:#aaa">${n.datos_clave || ''}</span>
+                    </div>`
+                ).join('');
+                html += `</div>`;
+            }
+            if (parsed.eventos_clave && parsed.eventos_clave.length > 0) {
+                html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">📋 Eventos clave</strong><br>`;
+                html += parsed.eventos_clave.map(e => `<div style="padding:0.2rem 0">· ${e}</div>`).join('');
+                html += `</div>`;
+            }
+            html += `<div style="margin-top:0.5rem;font-style:italic;color:#aaa">${parsed.resumen_narrativo || ''}</div>`;
+        } catch(e) {
+            html += `<pre style="white-space:pre-wrap;font-size:0.78rem">${state.gameState.longTermMemory}</pre>`;
+        }
+    } else {
+        html += `<div style="color:#888;font-style:italic">La memoria se consolidará automáticamente en el turno ${10 - (turns % 10)} siguiente. Hasta entonces, la IA trabaja con los últimos 30 turnos de conversación directa.</div>`;
+    }
+
+    content.innerHTML = html;
+    modal.classList.remove('hidden');
+}
+
+// ===================== DEATH SYSTEM =====================
+function triggerDeath(deathNote) {
+    const char = state.character;
+    char.status = 'dead';
+    char.deathNote = deathNote || `Cayó en ${state.gameState.location}`;
+    char.classEvolution = state.gameState.classEvolution;
+    updateCharData(char);
+    saveWorldEvent({
+        location: state.gameState.location,
+        event: `${char.name}, ${char.race} ${char.classe}, murió aquí. ${deathNote || ''}`,
+        characterName: char.name,
+        characterRace: char.race,
+        characterClass: char.classe,
+        type: 'death'
+    });
+    document.getElementById('deathNote').textContent = deathNote || `${char.name} cayó en ${state.gameState.location}.`;
+    document.getElementById('deathModal').classList.remove('hidden');
+}
+
+// ===================== CHAT RENDERING =====================
+function renderChat() {
+    const container = document.getElementById('chatContainer');
+    if (!container) return;
+    container.innerHTML = '';
+    state.chatHistory.forEach((msg,idx) => container.appendChild(createMessageEl(msg,idx)));
+    container.scrollTop = container.scrollHeight;
+}
+
+function createMessageEl(msg, idx) {
+    const wrap = document.createElement('div');
+    wrap.setAttribute('data-idx', idx);
+    if (msg.role === 'dm') {
+        wrap.className = 'message dm';
+        let rollHtml = '';
+        if (msg.rollResult) {
+            const modDisplay = msg.rollResult.mod >= 0 ? `+${msg.rollResult.mod}` : `${msg.rollResult.mod}`;
+            rollHtml = `<div class="roll-badge ${msg.rollResult.success?'success':'failure'}">${msg.rollResult.skill} d20=${msg.rollResult.roll}${modDisplay}=${msg.rollResult.total} ${msg.rollResult.success?'Éxito':'Fallo'}</div>`;
+        }
+        wrap.innerHTML = `
+            <div class="dm-header"><span class="dm-label">Maestro de Mazmorras</span><span class="dm-location">${msg.location||''} · ${msg.time||''}</span></div>
+            <div class="dm-content">${msg.content}</div>
+            ${rollHtml}
+            ${msg.actions?.length ? `<div class="action-chips">${msg.actions.map(a=>`<button class="action-chip" onclick="useAction('${a.replace(/'/g,"\\'").replace(/"/g,'\\"')}')">↗ ${a}</button>`).join('')}</div>` : ''}`;
+    } else {
+        wrap.className = 'message player';
+        let rollHtml = '';
+        if (msg.rollState==='pending' && !msg.roll && state.pendingRoll?.trigger) {
+            const t = state.pendingRoll.trigger;
+            const statVal = state.pendingRoll?.statValue || 10;
+            const mod = Math.floor(((statVal)-10)/2);
+            rollHtml = `<div class="roll-pending"><span class="roll-skill">${t.skill}</span><span class="roll-mod">${mod>=0?'+':''}${mod}</span><span class="roll-dc">DC ${t.dc}</span><button class="roll-btn" onclick="executeRoll(${idx})">→ Tirar</button></div>`;
+        } else if (msg.roll) {
+            const modDisplay = msg.roll.mod >= 0 ? `+${msg.roll.mod}` : `${msg.roll.mod}`;
+            rollHtml = `<div class="roll-badge ${msg.roll.success?'success':'failure'}">${msg.roll.skill} d20=${msg.roll.roll}${modDisplay}=${msg.roll.total} ${msg.roll.success?'Éxito':'Fallo'}</div>`;
+            // Show NPC opposed roll if present
+            if (msg.npcRoll) {
+                const npcModDisplay = msg.npcRoll.mod >= 0 ? `+${msg.npcRoll.mod}` : `${msg.npcRoll.mod}`;
+                const npcClass = msg.npcRoll.playerWins ? 'npc-roll-lost' : 'npc-roll-won';
+                const outcome = msg.npcRoll.playerWins ? '🗡️ Engaño logrado' : '👁️ NPC sospecha';
+                rollHtml += `<div class="roll-badge npc-opposed ${npcClass}">NPC ${msg.npcRoll.skill} d20=${msg.npcRoll.roll}${npcModDisplay}=${msg.npcRoll.total} · ${outcome}</div>`;
+            }
+        }
+        wrap.innerHTML = `<div class="player-action">${msg.content}</div>${rollHtml}`;
+    }
+    return wrap;
+}
+
+function addDMMessage(content, actions) {
+    const msg = { role:'dm', content, actions:actions||[], location:state.gameState.location, time:state.gameState.timeOfDay };
+    state.chatHistory.push(msg);
+    const container = document.getElementById('chatContainer');
+    if (container) { container.appendChild(createMessageEl(msg, state.chatHistory.length-1)); container.scrollTop = container.scrollHeight; }
+}
+function addPlayerMessage(content, roll, rollState, idx) {
+    const msg = { role:'player', content, roll, rollState };
+    state.chatHistory.push(msg);
+    const container = document.getElementById('chatContainer');
+    if (container) { container.appendChild(createMessageEl(msg, idx)); container.scrollTop = container.scrollHeight; }
+}
+
+function updateStatus() {
+    const el = id => document.getElementById(id);
+    if (el('hpDisplay')) el('hpDisplay').textContent = `${state.gameState.hp}/${state.gameState.maxHp}`;
+    if (el('locationDisplay')) el('locationDisplay').textContent = state.gameState.location;
+    if (el('timeDisplay')) el('timeDisplay').textContent = state.gameState.timeOfDay;
+    if (el('inventoryDisplay')) {
+        if (state.gameState.inventory.length === 0) {
+            el('inventoryDisplay').textContent = 'Vacío';
+        } else {
+            // Show first few items with details
+            const itemsToShow = state.gameState.inventory.slice(0, 3);
+            const itemTexts = itemsToShow.map(item => {
+                const itemName = typeof item === 'string' ? item : item.name;
+                const itemType = typeof item === 'string' ? 'objeto' : (item.type || 'objeto');
+                return `${itemName} (${itemType})`;
+            });
+            let displayText = itemTexts.join(', ');
+            if (state.gameState.inventory.length > 3) {
+                displayText += `... (+${state.gameState.inventory.length - 3} más)`;
+            }
+            el('inventoryDisplay').textContent = displayText;
+        }
+    }
+    // Add level, XP, and skill points display
+    if (el('levelDisplay')) {
+        const xpForNextLevel = (state.character.level + 1) * 100;
+        const xpProgress = (state.character.experience / xpForNextLevel) * 100;
+        el('levelDisplay').textContent = `Nivel ${state.character.level} (${state.character.experience}/${xpForNextLevel} XP) ${state.character.skillPoints > 0 ? `[${state.character.skillPoints} pts]` : ''}`;
+    }
+    updateMemoryIndicator();
+}
+
+function openPartyModal() {
+    const modal = document.getElementById('partyModal');
+    const content = document.getElementById('partyModalContent');
+    if (!modal || !content || !state.character) return;
+    const char = state.character;
+    const hpPct = Math.max(0, Math.min(100, (state.gameState.hp/state.gameState.maxHp)*100));
+    const hpColor = hpPct>60?'#4a7c59':hpPct>30?'#8a6a20':'#7c4a4a';
+    const portraitUrl = getPortraitUrl(char, 200);
+    const curseHtml = state.gameState.curse ? `<div class="curse-badge">🌑 ${state.gameState.curse}</div>` : '';
+    const classLabel = state.gameState.classEvolution || `${char.race} ${char.classe}`;
+    const companionHtml = (state.gameState.companions||[]).map(c => {
+        const cp = Math.max(0,Math.min(100,(c.hp/c.maxHp)*100));
+        const rel = state.gameState.relationships?.[c.name];
+        const relBadge = rel && rel.type !== 'neutral' ? `<span class="rel-badge rel-${rel.type}">${rel.type==='romantic'?'💕':rel.type==='friend'?'🤝':rel.type==='rival'?'⚔️':'👤'} ${rel.type}</span>` : '';
+        const cPortrait = getCompanionPortraitUrl(c, 100);
+        return `<div class="companion-card">
+            <div class="companion-avatar-wrap">
+                <img src="${cPortrait}" class="companion-portrait" alt="${c.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+                <div class="companion-avatar" style="display:none">${c.icon||'👤'}</div>
+            </div>
+            <div class="companion-info">
+                <div class="companion-name">${c.name} ${relBadge}</div>
+                <div class="companion-role">${c.role||''}</div>
+                ${c.description ? `<div class="companion-desc">${c.description}</div>` : ''}
+                <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${cp}%;background:${cp>60?'#4a7c59':cp>30?'#8a6a20':'#7c4a4a'}"></div></div>
+                <div class="hp-text">PV ${c.hp}/${c.maxHp}</div>
+                <button class="companion-chat-btn" onclick="document.getElementById('partyModal').classList.add('hidden');openCompanionChat('${c.name.replace(/'/g,"\'")}')">💬 Hablar</button>
+            </div>
+        </div>`;
+    }).join('');
+    content.innerHTML = `
+        <div style="display:flex;gap:1rem;align-items:flex-start;margin-bottom:1rem">
+            <img src="${portraitUrl}" style="width:80px;height:100px;object-fit:cover;border-radius:6px;flex-shrink:0" loading="lazy" onerror="this.style.display='none'">
+            <div style="flex:1;min-width:0">
+                <div style="font-family:Cinzel,serif;font-size:1rem;color:var(--accent)">${char.name}</div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.4rem">${classLabel}</div>
+                ${curseHtml}
+                <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
+                <div class="hp-text">PV ${state.gameState.hp} / ${state.gameState.maxHp}</div>
+                <div class="stats-mini" style="margin-top:0.5rem">${Object.entries(char.stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `<div class="stat-mini"><span class="stat-label">${ab}</span><span class="stat-val">${v}</span><span class="stat-mod">${m>=0?'+':''}${m}</span></div>`;}).join('')}</div>
+                <div class="level-info" style="margin-top:0.5rem; font-size:0.9rem;">
+                    Nivel ${state.character.level}
+                    (${state.character.experience}/${((state.character.level + 1) * 100)} XP)
+                    ${state.character.skillPoints > 0 ? `[${state.character.skillPoints} puntos de habilidad disponibles]` : ''}
+                </div>
+            </div>
+        </div>
+        ${companionHtml ? `<div class="companions-label" style="margin-bottom:0.5rem">Compañeros</div>${companionHtml}` : '<div style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:1rem">Aún no tienes compañeros</div>'}
+    `;
+    modal.classList.remove('hidden');
+}
+
+function updatePartyPanel() {
+    const panel = document.getElementById('partyPanel');
+    if (!panel || !state.character) return;
+    const char = state.character;
+    const hpPct = Math.max(0, Math.min(100, (state.gameState.hp/state.gameState.maxHp)*100));
+    const hpColor = hpPct>60?'#4a7c59':hpPct>30?'#8a6a20':'#7c4a4a';
+    const classLabel = state.gameState.classEvolution || `${char.race} ${char.classe}`;
+    const curseHtml = state.gameState.curse ? `<div class="curse-badge">🌑 ${state.gameState.curse}</div>` : '';
+    const companionHtml = (state.gameState.companions||[]).map(c => {
+        const cp = Math.max(0,Math.min(100,(c.hp/c.maxHp)*100));
+        const rel = state.gameState.relationships?.[c.name];
+        const relBadge = rel && rel.type !== 'neutral' ? `<span class="rel-badge rel-${rel.type}">${rel.type==='romantic'?'💕':rel.type==='friend'?'🤝':rel.type==='rival'?'⚔️':'👤'} ${rel.type}</span>` : '';
+        const cPortrait = getCompanionPortraitUrl(c, 120);
+        return `<div class="companion-card">
+            <div class="companion-avatar-wrap">
+                <img src="${cPortrait}" class="companion-portrait" alt="${c.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+                <div class="companion-avatar" style="display:none">${c.icon||'👤'}</div>
+            </div>
+            <div class="companion-info">
+                <div class="companion-name">${c.name} ${relBadge}</div>
+                <div class="companion-role">${c.role||''}</div>
+                ${c.description ? `<div class="companion-desc">${c.description}</div>` : ''}
+                <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${cp}%;background:${cp>60?'#4a7c59':cp>30?'#8a6a20':'#7c4a4a'}"></div></div>
+                <div class="hp-text">PV ${c.hp}/${c.maxHp}</div>
+                <button class="companion-chat-btn" onclick="openCompanionChat('${c.name.replace(/'/g,"\\'")}')">💬 Hablar</button>
+            </div>
+        </div>`;
+    }).join('');
+    const portraitUrl = getPortraitUrl(char, 300);
+    panel.innerHTML = `<div class="party-card">
+        <div class="party-portrait-wrap">
+            <img src="${portraitUrl}" class="party-portrait" alt="${char.name}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+            <div class="party-avatar party-avatar-fallback" style="display:none">${CLASS_ICONS[char.classe]||'⚔️'}</div>
+        </div>
+        <div class="party-name">${char.name}</div>
+        <div class="party-class">${classLabel}</div>
+        ${curseHtml}
+        <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${hpPct}%;background:${hpColor}"></div></div>
+        <div class="hp-text">PV ${state.gameState.hp} / ${state.gameState.maxHp}</div>
+        <div class="stats-mini">${Object.entries(char.stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `<div class="stat-mini"><span class="stat-label">${ab}</span><span class="stat-val">${v}</span><span class="stat-mod">${m>=0?'+':''}${m}</span></div>`;}).join('')}</div>
+        <div class="party-bg">${char.background}${char.motivation?(' · '+char.motivation.substring(0,28)):''}</div>
+    </div>
+    ${companionHtml ? `<div class="companions-section"><div class="companions-label">Compañeros</div>${companionHtml}</div>` : ''}
+    ${Object.entries(state.gameState.relationships||{}).filter(([k])=>!(state.gameState.companions||[]).find(c=>c.name===k)).length > 0 ? `
+    <div class="companions-section">
+        <div class="companions-label">Relaciones</div>
+        ${Object.entries(state.gameState.relationships||{}).filter(([k])=>!(state.gameState.companions||[]).find(c=>c.name===k)).map(([name,rel])=>`
+        <div class="rel-npc-row">
+            <span class="rel-badge rel-${rel.type}">${rel.type==='romantic'?'💕':rel.type==='friend'?'🤝':rel.type==='rival'?'⚔️':'👤'}</span>
+            <span class="rel-npc-name">${name}</span>
+            <span class="rel-level">${'★'.repeat(rel.level||0)}${'☆'.repeat(5-(rel.level||0))}</span>
+        </div>`).join('')}
+    </div>` : ''}`;
+}
+
+// ===================== API =====================
+async function callAndRespond(action, rollResult) {
+    const playerInput = document.getElementById('playerInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const typingEl = document.createElement('div');
+    typingEl.className = 'typing-indicator'; typingEl.id = 'typingIndicator';
+    typingEl.textContent = 'El Maestro de Mazmorras narra...';
+    const container = document.getElementById('chatContainer');
+    if (container) { container.appendChild(typingEl); container.scrollTop = container.scrollHeight; }
+
+    try {
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
+        let response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
+
+        // Debug logging
+        if (DEBUG_IA_COMMUNICATION) {
+            console.log('IA RAW RESPONSE:', response);
+        }
+
+        let { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate } = parseLlmResponse(response);
+
+        // Debug logging
+        if (DEBUG_IA_COMMUNICATION) {
+            console.log('PARSED IA RESPONSE:', { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate });
+        }
+
+        // Fallback: if IA didn't request a roll but we think it should have, try again with more explicit instructions
+        if (!rollRequest) {
+            const suggestedRoll = guessRequiredRoll(action);
+            // Backup detection for perception/action keywords that might be missed by guessRequiredRoll
+            const actionLower = action.toLowerCase();
+            const strongPerceptionRoots = ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui'];
+            const hasStrongKeyword = strongPerceptionRoots.some(root => actionLower.includes(root));
+
+            if (suggestedRoll || hasStrongKeyword) {
+                // If we have a suggested roll from guessRequiredRoll, use it
+                // Otherwise, default to Perception SAB for common perception actions
+                const rollToUse = suggestedRoll || { skill: 'Percepción', stat: 'SAB' };
+                // Create a more insistent user prompt that explicitly asks for a roll
+                const insistentAction = `${action}\n\nIMPORTANTE: Esta acción claramente requiere una tirada de dados. Por favor, incluye un bloque [ROLL:] en tu respuesta con la skill '${rollToUse.skill}', stat '${rollToUse.stat}', dc apropiado y razón.`;
+                const insistentResponse = await Promise.race([callGroqApi(insistentAction, rollResult), timeoutPromise]);
+
+                // Debug logging
+                if (DEBUG_IA_COMMUNICATION) {
+                    console.log('IA RESPONSE TO INSISTENT PROMPT:', insistentResponse);
+                }
+
+                const { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate, learnUpdate: insistentLearnUpdate } = parseLlmResponse(insistentResponse);
+
+                // Debug logging
+                if (DEBUG_IA_COMMUNICATION) {
+                    console.log('PARSED INSISTENT IA RESPONSE:', { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate, learnUpdate: insistentLearnUpdate });
+                }
+
+                // Use the insistent response if it provided a roll request, otherwise stick with original
+                if (insistentRollRequest) {
+                    narration = insistentNarration;
+                    stateUpdates = insistentStateUpdates;
+                    actions = insistentActions;
+                    legacy = insistentLegacy;
+                    deathNarration = insistentDeathNarration;
+                    rollRequest = insistentRollRequest;
+                    npcUpdate = insistentNpcUpdate;
+                    learnUpdate = insistentLearnUpdate;
+                    if (insistentNpcUpdate) processNpcUpdate(insistentNpcUpdate);
+                }
+            }
+        }
+
+        if (npcUpdate) processNpcUpdate(npcUpdate);
+        if (learnUpdate) processLearnUpdate(learnUpdate);
+        document.getElementById('typingIndicator')?.remove();
+
+        // Ensure companions and relationships are initialized
+        if (!state.gameState.companions) state.gameState.companions = [];
+        if (!state.gameState.relationships) state.gameState.relationships = {};
+
+        // Ensure we have actions to show the user
+        if (!actions || actions.length === 0) {
+            actions = generateDefaultActions();
+        }
+
+        if (stateUpdates) {
+            // Validate state updates for debugging
+            validateStateUpdates(stateUpdates);
+
+            Object.assign(state.gameState, stateUpdates);
+            if (!state.gameState.companions) state.gameState.companions = [];
+            if (!state.gameState.relationships) state.gameState.relationships = {};
+        }
+
+        if (legacy) saveWorldEvent({ ...legacy, characterName: state.character.name, characterRace: state.character.race, characterClass: state.character.classe });
+
+        // If AI requests a roll, mark the DM message and set pendingRoll
+        if (rollRequest) {
+            const dmMsgIdx = state.chatHistory.length;
+            const dmMsg = { role:'dm', content:narration, actions:actions, location:state.gameState.location, time:state.gameState.timeOfDay, rollPending:true };
+            state.chatHistory.push(dmMsg);
+            state.pendingRoll = { trigger: rollRequest };
+            const container = document.getElementById('chatContainer');
+            if (container) { container.appendChild(createMessageEl(dmMsg, dmMsgIdx)); container.scrollTop = container.scrollHeight; }
+        } else {
+            addDMMessage(narration, actions);
+        }
+        updateStatus(); updatePartyPanel();
+
+        // Check for death
+        if (state.gameState.hp <= 0) {
+            saveChatHistoryFor(state.activeCharId, state.chatHistory);
+            saveGameStateFor(state.activeCharId, state.gameState);
+            triggerDeath(deathNarration || `${state.character.name} cayó en ${state.gameState.location}.`);
+            return;
+        }
+
+        // Award XP for successful rolls
+        if (rollResult && rollResult.success) {
+            // Base XP for success + bonus based on difficulty
+            const baseXP = 10;
+            const difficultyBonus = Math.floor(rollResult.dc / 2); // More difficult rolls give more XP
+            const xpEarned = baseXP + difficultyBonus;
+            addExperience(xpEarned);
+        } else if (rollResult && !rollResult.success) {
+            // Give half XP for failed attempts (learning from mistakes)
+            const baseXP = 10;
+            const difficultyBonus = Math.floor(rollResult.dc / 2);
+            const xpEarned = Math.floor((baseXP + difficultyBonus) / 2);
+            addExperience(xpEarned);
+        }
+
+        // Check for curse
+        if (state.gameState.curse && state.character.status !== 'cursed') {
+            state.character.status = 'cursed';
+            updateCharData(state.character);
+            saveWorldEvent({ location: state.gameState.location, event: `${state.character.name}, ${state.character.race} ${state.character.classe}, fue maldito aquí. Maldición: ${state.gameState.curse}.`, characterName: state.character.name, characterRace: state.character.race, characterClass: state.character.classe, type: 'curse' });
+        }
+
+        state.turnCount++;
+        if (state.turnCount % 10 === 0) await summarizeContext();
+        saveChatHistoryFor(state.activeCharId, state.chatHistory);
+        saveGameStateFor(state.activeCharId, state.gameState);
+    } catch(err) {
+        console.error(err);
+        document.getElementById('typingIndicator')?.remove();
+        let errorMessage = 'El humo de la taberna nubla la visión. Inténtalo de nuevo.';
+        let isUserActionable = false;
+
+        if (err.message === 'timeout') {
+            errorMessage = 'La conexión tardó demasiado. El Maestro de Mazmorras está ocupado. Inténtalo de nuevo en unos momentos.';
+            isUserActionable = true;
+        } else if (err.message && err.message.includes('Failed to fetch')) {
+            errorMessage = 'No se pudo conectar con el servidor. Verifica tu conexión a internet e inténtalo de nuevo.';
+            isUserActionable = true;
+        } else if (err.message && err.message.includes('JSON.parse')) {
+            errorMessage = 'La respuesta recibida no tenía el formato esperado. Esto puede ser temporal; inténtalo de nuevo.';
+            isUserActionable = true;
+        } else if (err.name === 'TypeError') {
+            errorMessage = 'Ocurrió un error inesperado en el procesamiento. Por favor, inténtalo de nuevo.';
+            isUserActionable = true;
+        } else if (err.message && err.message.includes('Groq')) {
+            // Handle Groq API specific errors
+            if (err.message.includes('401') || err.message.includes('403')) {
+                errorMessage = 'Error de autenticación con la IA. Verifica que tu API key de Groq sea válida y esté correctamente configurada.';
+                isUserActionable = true;
+            } else if (err.message.includes('429')) {
+                errorMessage = 'Has excedido el límite de solicitudes a la IA. Espera un momento antes de intentarlo de nuevo.';
+                isUserActionable = true;
+            } else if (err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('504')) {
+                errorMessage = 'El servicio de IA está experimentando problemas técnicos. Por favor, inténtalo de nuevo más tarde.';
+                isUserActionable = true;
+            } else {
+                errorMessage = `Error del servicio de IA: ${err.message.replace('Groq ', '')}. Inténtalo de nuevo.`;
+                isUserActionable = true;
+            }
+        } else if (err.message && err.message.includes('parseLlmResponse')) {
+            errorMessage = 'La IA respondió de forma inesperada. El Maestro de Mazmorras intentará interpretar tu acción de otra manera.';
+            isUserActionable = true;
+        }
+
+        // Add debugging info in debug mode
+        if (DEBUG_IA_COMMUNICATION && !isUserActionable) {
+            errorMessage += ` (Detalles: ${err.message})`;
+        }
+
+        addDMMessage(errorMessage, [isUserActionable ? ['Intentarlo de nuevo', 'Cambiar acción', 'Ver ayuda'] : []]);
+    } finally {
+        if (playerInput) { playerInput.disabled = false; }
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
+    }
+}
+
+function buildPrompt(playerAction, rollResult) {
+    const char = state.character;
+    const stats = char.stats;
+    const fmod = ab => { const m=Math.floor((stats[ab]-10)/2); return (m>=0?'+':'')+m; };
+    const statMap = { 'Ataque':'FUE','Carisma':'CAR','Intimidación':'CAR','Sigilo':'DES','Hurto':'DES','Magia':'INT','Conocimiento':'INT','Investigación':'SAB','Medicina':'SAB' };
+    let rollSection = '';
+    if (rollResult) {
+        const ab = statMap[rollResult.skill]||'SAB';
+        rollSection = `\nTIRADA: ${rollResult.skill} — d20(${rollResult.roll}) ${fmod(ab)} = ${rollResult.total} vs DC ${rollResult.dc} → ${rollResult.success?'ÉXITO':'FALLO'}`;
+    }
+    // Long-term memory section (consolidated history anchor)
+    let longTermSection = '';
+    if (state.gameState.longTermMemory) {
+        let ltm = state.gameState.longTermMemory;
+        try {
+            const parsed = JSON.parse(ltm);
+            const npcsStr = (parsed.npcs_conocidos || []).map(n =>
+                `  · ${n.nombre} (${n.rol}): ${n.datos_clave || ''}`
+            ).join('\n');
+            const eventsStr = (parsed.eventos_clave || []).map(e => `  · ${e}`).join('\n');
+            longTermSection = `\nMEMORIA CONSOLIDADA (INMUTABLE — ESTOS HECHOS SON VERDAD Y NO CAMBIAN):
+- Ubicación actual: ${parsed.ubicacion_actual || ''}
+- Razón de estar aquí: ${parsed.razon_en_ubicacion || ''}
+- Misión: ${parsed.mision_activa || ''}
+- NPCs conocidos con sus nombres EXACTOS:\n${npcsStr || '  (ninguno registrado)'}
+- Eventos clave ocurridos:\n${eventsStr || '  (ninguno)'}
+- Historia hasta ahora: ${parsed.resumen_narrativo || ''}`;
+        } catch(e) {
+            // Fallback: include raw text
+            longTermSection = `\nMEMORIA CONSOLIDADA (INMUTABLE):\n${ltm.substring(0, 600)}`;
+        }
+    }
+
+    // Appearance section — what NPCs actually see when they look at the character
+    const raceAppearance = RACE_APPEARANCE[char.race] || `Rasgos de ${char.race}.`;
+    const equipped = state.gameState.equipped || {};
+    const equippedParts = [
+        equipped.ropa      ? `Viste: ${equipped.ropa}` : null,
+        equipped.arma      ? `Lleva (mano derecha): ${equipped.arma}` : null,
+        equipped.offhand   ? `Lleva (mano izquierda / espalda): ${equipped.offhand}` : null,
+        equipped.accesorio ? `Accesorio visible: ${equipped.accesorio}` : null
+    ].filter(Boolean);
+    const charPhysical = char.appearance ? `Rasgos físicos personales: ${char.appearance}.` : '';
+    const appearanceSection = `\nAPARIENCIA VISIBLE DEL PERSONAJE (lo que cualquier NPC ve al mirarle):
+- Raza: ${char.race} — ${raceAppearance}
+${charPhysical ? '- ' + charPhysical : ''}
+${equippedParts.length ? equippedParts.map(p=>'- '+p).join('\n') : '- Sin equipo especial visible.'}
+REGLA: usa esta información cuando evalúes la plausibilidad de mentiras sociales, disfraces o impostura. Un elfo SIN alas ni aura mágica que afirma ser hada de verdad genera desconfianza automática. Alguien con armadura y armas visibles no parece emisario diplomático.`;
+
+    const worldEvents = getEventsForLocation(state.gameState.location);
+    const worldSection = worldEvents.length > 0 ? `\nHISTORIA DEL MUNDO EN ESTA ZONA:\n${worldEvents.map(e=>`- ${e.event}`).join('\n')}` : '';
+    const companions = (state.gameState.companions||[]).map(c=>`- ${c.name} (${c.role||'aliado'}, PV ${c.hp}/${c.maxHp})`).join('\n')||'ninguno';
+    const rels = Object.entries(state.gameState.relationships||{}).map(([k,v])=>`- ${k}: ${v.type} (nivel ${v.level}/5)`).join('\n')||'ninguna';
+    const npcs = (state.gameState.npcs||[]);
+    const npcSection = npcs.length > 0 ? '\nPERSONAJES CONOCIDOS:\n' + npcs.map(n=>{
+        const tier = getNpcRelTier(n.relationship);
+        const facts = n.knownFacts.slice(-3).join('; ');
+        const lastEvent = [...(n.goodMemories||[]),...(n.badMemories||[])].slice(-1)[0]||'';
+        const capStr = n.maxRelationship !== undefined && n.maxRelationship < 5 ? ` [TECHO:${getNpcRelTier(n.maxRelationship).label}]` : '';
+        const biasStr = n.biases && n.biases.length ? ` [Sesgos: ${n.biases.join(', ')}]` : '';
+        const persStr = n.personality ? ` [Personalidad: ${n.personality}]` : '';
+        return `- ${n.name} (${n.race||''}${n.role?' · '+n.role:''}): REL=${tier.label}${capStr}${biasStr}${persStr}. ${facts}${lastEvent?' | Último: '+lastEvent:''}`;
+    }).join('\n') : '';
+    const curseNote = state.gameState.curse ? `\nMALDICIÓN ACTIVA: ${state.gameState.curse}` : '';
+    const classLabel = state.gameState.classEvolution ? `${char.classe} (evolucionando: ${state.gameState.classEvolution})` : char.classe;
+    const classAbilities = CLASS_ABILITIES[char.classe];
+    const knowledges = state.gameState.knowledges || [];
+    const learnedAbilities = state.gameState.learnedAbilities || [];
+    const knowledgesStr = knowledges.length
+        ? knowledges.map(k => `${k.name} (${k.type}, nivel ${k.level}${k.source ? ', fuente: '+k.source : ''})`).join('; ')
+        : 'ninguno';
+    const abilitiesStr = learnedAbilities.length
+        ? learnedAbilities.map(a => `${a.name} [${a.category}, usa ${a.stat}${a.dcBonus ? ', DC-'+a.dcBonus : ''}]`).join('; ')
+        : 'ninguna';
+    const classRulesSection = classAbilities ? `\nRESTRICCIONES DE CLASE — OBLIGATORIO:\n${char.name} es ${char.classe}. PUEDE naturalmente: ${classAbilities.can.join(', ')}.\nPOR DEFECTO NO PUEDE: ${classAbilities.cannot.join(', ')}.\n\nCONOCIMIENTOS ADQUIRIDOS (lo que ha estudiado y aprendido a lo largo del juego):\n${knowledgesStr}\n\nHABILIDADES APRENDIDAS (lo que puede hacer activamente):\n${abilitiesStr}\n\nREGLA DE EXCEPCIONES: Si el personaje intenta algo fuera de su clase pero tiene el conocimiento adquirido relevante, puede intentarlo con DC aumentado (+3). Si no tiene el conocimiento, narra que le es imposible por ignorancia — no es fracaso de tirada, es incapacidad. No hay excepciones sin conocimiento registrado.\n\nCUANDO EL PERSONAJE APRENDE ALGO NUEVO (estudia un libro, recibe entrenamiento, descubre un secreto profundo) añade al final de tu respuesta:\n[LEARN: {"type":"knowledge","id":"id_unico","name":"Nombre del conocimiento","category":"magic|lore|language|skill|craft","level":1,"source":"De dónde lo aprendió","description":"qué sabe exactamente"}]\nSi el aprendizaje le da una nueva habilidad activa:\n[LEARN: {"type":"ability","id":"id_unico","name":"Nombre de la habilidad","category":"spell|combat|social|craft","stat":"FUE|DES|CON|INT|SAB|CAR","dcBonus":0,"source":"De dónde","description":"qué puede hacer"}]\nUSA [LEARN:] solo cuando sea un aprendizaje significativo y permanente, no para acciones cotidianas.\n` : '';
+
+    const system = `Eres el Maestro de Mazmorras de una campaña de D&D en un mundo de fantasía oscura medieval. Narras en segunda persona con prosa cinematográfica.
+
+PERSONAJE:
+- ${char.name}, ${char.race}, ${classLabel}, ${char.gender||''}${char.gender ? ',' : ''} trasfondo: ${char.background}${char.motivation?', motivación: '+char.motivation:''}
+- FUE ${stats.FUE}(${fmod('FUE')}), DES ${stats.DES}(${fmod('DES')}), CON ${stats.CON}(${fmod('CON')}), INT ${stats.INT}(${fmod('INT')}), SAB ${stats.SAB}(${fmod('SAB')}), CAR ${stats.CAR}(${fmod('CAR')})
+${curseNote}
+
+${longTermSection}
+
+HISTORIAL RECIENTE (últimos turnos):
+${getRecentHistory()}
+
+ESTADO ACTUAL:
+- Ubicación: ${state.gameState.location} | Hora: ${state.gameState.timeOfDay}
+- HP: ${state.gameState.hp}/${state.gameState.maxHp}
+- Inventario: ${state.gameState.inventory.join(', ')||'vacío'}
+- Misión: ${state.gameState.quest}
+- Contexto: ${state.gameState.summary||'inicio'}
+- Compañeros: ${companions}
+- Relaciones: ${rels}${npcSection}
+${appearanceSection}
+${worldSection}${rollSection}
+${classRulesSection}
+INSTRUCCIONES:
+- **REGLA DE OBLIGATORIO CUMPLIMIENTO**: Cuando veas "[ACTION SELECCIONADA] X" en el prompt del usuario, debes interpretar "X" como la acción que el personaje ha seleccionado realizar. Describe las consecuencias de esa acción sin repetir literalmente "X". Muestra lo que sucede como resultado de esa elección.
+- **TIRADAS OPUESTAS — OBLIGATORIO**: Cuando recibes un bloque [RESULTADO OPUESTO: ...], debes narrar respetando quién ganó. Si el NPC gana, el NPC sospecha, hace preguntas difíciles, o descubre el engaño — proporcional a la diferencia de puntos. No ignores nunca el resultado de la tirada del NPC.
+- **PLAUSIBILIDAD DE MENTIRAS**: Aunque no haya tirada, si el jugador afirma algo muy inverosímil dado quién es (su raza, apariencia obvia, falta de pruebas) el NPC debería expresar dudas o pedir evidencia. Una hada de verdad tendría alas o aura mágica. Un enviado real llevaría documentos sellados. Los NPCs no son ingenuos.
+- **CONSISTENCIA NARRATIVA — NUNCA ROMPER**: Los nombres de personajes, NPCs y lugares ya establecidos en la conversación NO cambian. Si Gorin fue presentado como soldado, sigue siendo soldado. Si el lord se llama Harrington, sigue llamándose Harrington. Si el jugador está en el castillo por una razón específica, esa razón no cambia ni se olvida.
+- **CONTINUIDAD DE ESCENA**: Si el jugador acaba de seguir a alguien o entrar a un lugar, la siguiente respuesta ocurre en ese lugar con esos personajes. No introduzcas personajes nuevos sin lógica narrativa.
+- **MOTIVO DEL JUGADOR**: El resumen y el contexto indican por qué el jugador está en un lugar. Mantenlo siempre presente en la narración.
+- 60-120 palabras de narración. Conciso, cinematográfico, sin descripciones de entorno innecesarias. Ve al grano.
+- NPCs con nombres y personalidad consistente. Los eventos del mundo son REALES y visibles.
+- Si hay historia del mundo en esta zona, inclúyela naturalmente.
+- Romance, seducción y relaciones pueden desarrollarse naturalmente.
+- Si el jugador muere (hp=0), narra una muerte épica.
+- Narra las consecuencias claras de éxito o fracaso basado en el resultado de la tirada, manteniendo el tono cinematográfico y inmersivo.
+- Termina en momento de decisión o antes del bloque de tirada.
+- AVANZA LA HISTORIA: Cuando sea apropiado, cambia de ubicación y avanza la trama. Usa bloques [STATE:] para reflejar cambios en ubicación, hora del día, y otros aspectos del estado del juego. No te quedes estancado en un solo lugar sin razón narrativa.
+
+SISTEMA DE DADOS (CRÍTICO — SIGUE ESTO SIEMPRE):
+CASI TODA acción requiere tirada. Pide [ROLL] SIEMPRE en estos casos:
+- Hablar con alguien con intención (convencer, seducir, intimidar, mentir, pedir favor, flirtear) → CAR
+- Atacar, pelear, golpear, disparar → FUE (o DES si es a distancia/sigilo)
+- Esconderse, moverse sin ser visto, robar → DES
+- Lanzar magia, hechizos, conjuros → INT
+- Buscar algo, investigar, examinar → SAB o INT
+- Percibir peligro, intuir mentiras, detectar algo → SAB
+- ESCUCHAR CUALQUIER CONVERSACIÓN u OÍR SONIDOS → SAB (SIEMPRE requiere tirada)
+- MIRAR, VER u OBSERVAR CON INTENCIÓN → SAB (SIEMPRE requiere tirada)
+- Saltar, trepar, correr, forzar → FUE o DES
+- Resistir veneno/dolor/miedo → CON
+- Recordar lore, descifrar, identificar → INT
+- Curar, atender heridas → SAB
+
+NO necesita tirada: moverse de A a B sin obstáculos, describir pensamientos, acciones puramente pasivas, o cuando ya recibes el resultado de una tirada ([Tirada de X: ...]).
+
+En COMBATE: el [ROLL] es OBLIGATORIO siempre. Calcula el daño solo DESPUÉS de recibir el resultado.
+
+DC orientativos: trivial=6, fácil=8, normal=10, moderado=12, difícil=15, muy difícil=18, legendario=20
+
+Stats: FUE(Fuerza/Ataque/Atletismo), DES(Sigilo/Hurto/Acrobacias/Armas a distancia), CON(Resistencia/Aguante), INT(Magia/Arcanos/Conocimiento/Descifrar), SAB(Percepción/Medicina/Naturaleza/Intuición), CAR(Persuasión/Engaño/Intimidación/Seducción/Actuación)
+
+Al final, en ESTE ORDEN exacto:
+[ACTIONS: ["acción 1", "acción 2", "acción 3"]]
+[STATE: {"hp":N,"location":"X","timeOfDay":"X","inventory":[],"quest":"X","summary":"2 frases","companions":[],"relationships":{},"curse":""}]
+Si el resultado es incierto AÑADE TAMBIÉN:
+[ROLL: {"skill":"Nombre del skill","stat":"FUE|DES|CON|INT|SAB|CAR","dc":N,"reason":"por qué se pide la tirada"}]
+Si ocurre algo épico o permanente:
+[LEGACY: {"location":"nombre exacto","event":"descripción en tercera persona","type":"death/heroic/curse/discovery"}]
+Cuando interactúas con un PNJ con nombre, actualiza su registro (usa SOLO si hay algo nuevo o cambia la relación):
+[NPC: {"name":"Nombre","race":"Raza","role":"Rol/ocupación","gender":"hombre|mujer","personality":"rasgos de personalidad en 5-8 palabras","biases":["odio o preferencia 1","odio o preferencia 2"],"maxRelationship":5,"relationship":0,"fact":"dato que el jugador descubre","goodMemory":"evento positivo","badMemory":"evento negativo","lastSeen":"lugar actual","portraitHint":"rasgos visuales breves"}]
+Escala relación: -3=Enemigo Jurado, -2=Enemigo, -1=Rival, 0=Neutro, 1=Conocido, 2=Amigo, 3=Aliado, 4=Interés Romántico, 5=Amor
+maxRelationship: el TECHO PERMANENTE de relación con este jugador específico. Si el PNJ es racista, leal a una facción enemiga, o tiene razones para no confiar nunca del todo, reduce este valor. Ejemplos: guardia corrupto que odia elfos → maxRelationship:1. Mercenario desconfiado → 3. Una vez fijado NO cambia.
+REGLA CRÍTICA: la relación NUNCA puede mejorar solo porque el jugador sea amable. Debe haber acción concreta que justifique el cambio. Un PNJ con biases negativos resiste activamente el carisma del jugador.
+Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo al crear el PNJ. NUNCA incluyas [NPC] si no hay personaje nombrado significativo.`;
+
+    // Añadir regla especial para acciones de juego cuando la entrada corresponde a una opción mostrada
+    const lastDMMessage = state.chatHistory.findLast(msg => msg.role === 'dm');
+    let isGameAction = false;
+    if (lastDMMessage && lastDMMessage.actions && Array.isArray(lastDMMessage.actions)) {
+        isGameAction = lastDMMessage.actions.some(action => action === playerAction);
+    }
+
+    let userContent = playerAction;
+    if (isGameAction) {
+        userContent = `[ACTION SELECCIONADA] ${playerAction}\n\nCONTEXTO DE JUEGO: Esta acción ocurre dentro de una escena de rol de un juego de Dungeons & Dragons en un mundo de fantasía. Todos los personajes, objetos y situaciones son ficticios y forman parte de una narrativa colaborativa. Por favor, describe las consecuencias dentro de este marco de juego de roles, siguiendo todas las reglas establecidas para el Maestro de Mazmorras.\n\n(CLARIFICACIÓN: La acción anterior fue seleccionada por el jugador. Describa las consecuencias de que el jugador realice esta acción, sin atribuirla al Maestro de Mazmorras.)`;
+    }
+
+    return { system, user: userContent };
+}
+
+async function callGroqApi(playerAction, rollResult) {
+    const { system, user } = buildPrompt(playerAction, rollResult);
+
+    // Build conversation history for the model.
+    // If we have consolidated long-term memory, we only need recent turns
+    // (the LTM in the system prompt covers earlier context).
+    // Without LTM, send more turns to compensate.
+    const historyMessages = [];
+    const windowSize = state.gameState.longTermMemory ? 14 : 30;
+    const recentHistory = state.chatHistory.slice(-windowSize);
+    for (const msg of recentHistory) {
+        if (msg.role === 'player') {
+            historyMessages.push({ role: 'user', content: msg.content });
+        } else if (msg.role === 'dm') {
+            // Strip [STATE:], [ACTIONS:], [ROLL:], [NPC:] blocks from assistant messages
+            // to keep token count manageable while preserving narrative
+            const cleanContent = msg.content
+                .replace(/\[STATE:[\s\S]*?\]/g, '')
+                .replace(/\[ACTIONS:[\s\S]*?\]/g, '')
+                .replace(/\[ROLL:[\s\S]*?\]/g, '')
+                .replace(/\[NPC:[\s\S]*?\]/g, '')
+                .replace(/\[LEGACY:[\s\S]*?\]/g, '')
+                .replace(/\[LEARN:[\s\S]*?\]/g, '')
+                .trim();
+            if (cleanContent) historyMessages.push({ role: 'assistant', content: cleanContent });
+        }
+    }
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
+        body: JSON.stringify({
+            model:'llama-3.3-70b-versatile',
+            messages:[
+                {role:'system',content:system},
+                ...historyMessages,
+                {role:'user',content:user}
+            ],
+            temperature:0.7,
+            max_tokens:1000
+        })
+    });
+    if (!response.ok) { const e = await response.text(); throw new Error(`Groq ${response.status}: ${e}`); }
+    const data = await response.json();
+    return data.choices[0].message.content;
+}
+
+
+// ===================== NPC SYSTEM =====================
+const NPC_REL_TIERS = [
+    { value:-3, label:'Enemigo Jurado', color:'#8b0000', emoji:'💀' },
+    { value:-2, label:'Enemigo',        color:'#c0392b', emoji:'⚔️' },
+    { value:-1, label:'Rival',          color:'#e67e22', emoji:'😠' },
+    { value:0,  label:'Neutro',         color:'#7f8c8d', emoji:'😐' },
+    { value:1,  label:'Conocido',       color:'#2980b9', emoji:'👋' },
+    { value:2,  label:'Amigo',          color:'#27ae60', emoji:'🤝' },
+    { value:3,  label:'Aliado',         color:'#1abc9c', emoji:'🛡️' },
+    { value:4,  label:'Interés Romántico', color:'#e91e8c', emoji:'💕' },
+    { value:5,  label:'Amor',           color:'#ff4081', emoji:'❤️' }
+];
+
+function getNpcRelTier(value) {
+    return NPC_REL_TIERS.find(t => t.value === value) || NPC_REL_TIERS[3];
+}
+
+async function generateNpcPortrait(npc) {
+    const raceHint = npc.race ? npc.race.toLowerCase() : 'human';
+    const genderHint = npc.gender || '';
+    const visualHint = npc.portraitHint || npc.role || '';
+    const prompt = encodeURIComponent(`${genderHint} ${raceHint} ${visualHint}, semi-realistic digital painting, D&D NPC character portrait, artstation quality, dramatic lighting, fantasy, detailed face`);
+    const url = `https://image.pollinations.ai/prompt/${prompt}?width=256&height=256&seed=${Math.floor(Math.random()*9999)}&nologo=true`;
+    npc.portrait = url;
+    fsSaveGameState(state.activeCharId);
+    const panel = document.getElementById('npcModalContent');
+    if (panel) renderNpcModalContent();
+}
+
+function processLearnUpdate(update) {
+    if (!update || !update.type || !update.name) return;
+    if (!Array.isArray(state.gameState.knowledges)) state.gameState.knowledges = [];
+    if (!Array.isArray(state.gameState.learnedAbilities)) state.gameState.learnedAbilities = [];
+
+    if (update.type === 'knowledge') {
+        const id = update.id || update.name.toLowerCase().replace(/\s+/g,'_');
+        const existing = state.gameState.knowledges.find(k => k.id === id);
+        if (existing) {
+            if (update.level && update.level > existing.level) existing.level = update.level;
+        } else {
+            state.gameState.knowledges.push({
+                id,
+                name:        update.name,
+                type:        update.category || update.type || 'skill',
+                level:       update.level || 1,
+                source:      update.source || '',
+                description: update.description || ''
+            });
+        }
+    } else if (update.type === 'ability') {
+        const id = update.id || update.name.toLowerCase().replace(/\s+/g,'_');
+        const existing = state.gameState.learnedAbilities.find(a => a.id === id);
+        if (!existing) {
+            state.gameState.learnedAbilities.push({
+                id,
+                name:        update.name,
+                category:    update.category || 'skill',
+                stat:        update.stat || 'INT',
+                dcBonus:     update.dcBonus || update.dc_bonus || 0,
+                source:      update.source || '',
+                description: update.description || ''
+            });
+        }
+    }
+
+    fsSaveGameState(state.activeCharId);
+    const panel = document.getElementById('knowledgeModalContent');
+    if (panel) renderKnowledgeModalContent();
+}
+
+function processNpcUpdate(update) {
+    if (!update || typeof update !== 'object' || !update.name || typeof update.name !== 'string' || update.name.trim() === '') {
+        if (DEBUG_IA_COMMUNICATION) { console.warn('Invalid NPC update received:', update); }
+        return;
+    }
+    if (!state.gameState.npcs) state.gameState.npcs = [];
+    const sanitizedName = update.name.trim();
+    const existing = state.gameState.npcs.find(n => n.name.toLowerCase() === sanitizedName.toLowerCase());
+    if (existing) {
+        if (update.relationship !== undefined) {
+            const rel = parseInt(update.relationship);
+            if (!isNaN(rel)) {
+                const cap = existing.maxRelationship !== undefined ? existing.maxRelationship : 5;
+                const clampedRel = Math.min(cap, Math.max(-3, rel));
+                if (existing.relationship !== clampedRel) {
+                    existing.relationship = clampedRel;
+                    existing.relationshipLabel = getNpcRelTier(existing.relationship).label;
+                }
+            }
+        }
+        if (update.fact && typeof update.fact === 'string' && update.fact.trim() !== '') {
+            const fact = update.fact.trim();
+            if (!existing.knownFacts.includes(fact)) existing.knownFacts.push(fact);
+        }
+        if (update.goodMemory && typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '') {
+            const goodMemory = update.goodMemory.trim();
+            if (!existing.goodMemories.includes(goodMemory)) existing.goodMemories.push(goodMemory);
+        }
+        if (update.badMemory && typeof update.badMemory === 'string' && update.badMemory.trim() !== '') {
+            const badMemory = update.badMemory.trim();
+            if (!existing.badMemories.includes(badMemory)) existing.badMemories.push(badMemory);
+        }
+        if (update.race !== undefined && typeof update.race === 'string') { const r = update.race.trim(); if (r) existing.race = r; }
+        if (update.role !== undefined && typeof update.role === 'string') { const r = update.role.trim(); if (r) existing.role = r; }
+        if (update.lastSeen !== undefined && typeof update.lastSeen === 'string') { const r = update.lastSeen.trim(); if (r) existing.lastSeen = r; }
+        if (update.portraitHint !== undefined && typeof update.portraitHint === 'string') {
+            const ph = update.portraitHint.trim();
+            if (ph && existing.portraitHint !== ph) { existing.portraitHint = ph; generateNpcPortrait(existing); }
+        }
+        if (update.notes !== undefined && typeof update.notes === 'string') existing.notes = update.notes.trim();
+    } else {
+        let relationship = 0;
+        if (update.relationship !== undefined) {
+            const rel = parseInt(update.relationship);
+            if (!isNaN(rel)) relationship = Math.min(5, Math.max(-3, rel));
+        }
+        const tier = NPC_REL_TIERS.find(t => t.value === relationship) || NPC_REL_TIERS[3];
+        const name = sanitizedName;
+        const race = (typeof update.race === 'string') ? update.race.trim() : '';
+        const role = (typeof update.role === 'string') ? update.role.trim() : '';
+        const gender = (typeof update.gender === 'string') ? update.gender.trim() : '';
+        const portraitHint = (typeof update.portraitHint === 'string') ? update.portraitHint.trim() : '';
+        const lastSeen = (typeof update.lastSeen === 'string' && update.lastSeen.trim() !== '') ? update.lastSeen.trim() : (state.gameState.location || '');
+        const notes = (typeof update.notes === 'string') ? update.notes.trim() : '';
+        const knownFacts = Array.isArray(update.fact) ? update.fact.filter(f => typeof f === 'string' && f.trim() !== '').map(f => f.trim()) : (typeof update.fact === 'string' && update.fact.trim() !== '') ? [update.fact.trim()] : [];
+        const goodMemories = Array.isArray(update.goodMemory) ? update.goodMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim()) : (typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '') ? [update.goodMemory.trim()] : [];
+        const badMemories = Array.isArray(update.badMemory) ? update.badMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim()) : (typeof update.badMemory === 'string' && update.badMemory.trim() !== '') ? [update.badMemory.trim()] : [];
+        const npc = { id: name.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now(), name, race, role, gender, portrait: null, portraitHint, relationship, relationshipLabel: tier.label, knownFacts, goodMemories, badMemories, lastSeen, notes };
+        state.gameState.npcs.push(npc);
+        generateNpcPortrait(npc);
+    }
+    fsSaveGameState(state.activeCharId);
+    const panel = document.getElementById('npcModalContent');
+    if (panel) renderNpcModalContent();
+}
+
+// Extracts a [TAG: content] block from text, correctly handling nested brackets/braces and strings.
+// Returns { match: fullMatchString, content: innerContentString } or null.
+function extractTagBlock(text, tag) {
+    const prefix = '[' + tag + ':';
+    const idx = text.indexOf(prefix);
+    if (idx === -1) return null;
+    let i = idx + prefix.length;
+    while (i < text.length && (text[i] === ' ' || text[i] === '\n')) i++;
+    const contentStart = i;
+    let depth = 0, braceDepth = 0, inString = false, escape = false;
+    while (i < text.length) {
+        const c = text[i];
+        if (escape) { escape = false; i++; continue; }
+        if (c === '\\' && inString) { escape = true; i++; continue; }
+        if (c === '"') { inString = !inString; i++; continue; }
+        if (inString) { i++; continue; }
+        if (c === '{') braceDepth++;
+        else if (c === '}') { braceDepth--; }
+        else if (c === '[') depth++;
+        else if (c === ']') {
+            if (depth === 0 && braceDepth === 0) {
+                return { match: text.slice(idx, i + 1), content: text.slice(contentStart, i).trim() };
+            }
+            depth--;
+        }
+        i++;
+    }
+    return null;
+}
+
+function parseLlmResponse(response) {
+    let narration = response;
+    let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
+
+    const actionsBlock = extractTagBlock(response, 'ACTIONS');
+    if (actionsBlock) {
+        try { actions = JSON.parse(actionsBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ACTIONS block:', actionsBlock.content, e); }
+        narration = narration.replace(actionsBlock.match, '').trim();
+    }
+    const stateBlock = extractTagBlock(response, 'STATE');
+    if (stateBlock) {
+        try { stateUpdates = JSON.parse(stateBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse STATE block:', stateBlock.content, e); }
+        narration = narration.replace(stateBlock.match, '').trim();
+    }
+    const legacyBlock = extractTagBlock(response, 'LEGACY');
+    if (legacyBlock) {
+        try { legacy = JSON.parse(legacyBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEGACY block:', legacyBlock.content, e); }
+        narration = narration.replace(legacyBlock.match, '').trim();
+    }
+    const rollBlock = extractTagBlock(response, 'ROLL');
+    if (rollBlock) {
+        try {
+            const r = JSON.parse(rollBlock.content);
+            rollRequest = { skill: r.skill || 'Habilidad', stat: r.stat || guessStatFromSkill(r.skill || ''), dc: parseInt(r.dc) || 12, reason: r.reason || '' };
+        } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ROLL block:', rollBlock.content, e); }
+        narration = narration.replace(rollBlock.match, '').trim();
+    }
+    if (stateUpdates?.hp <= 0) { deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200); }
+    const npcBlock = extractTagBlock(response, 'NPC');
+    let npcUpdate = null;
+    if (npcBlock) {
+        try { npcUpdate = JSON.parse(npcBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse NPC block:', npcBlock.content, e); }
+        narration = narration.replace(npcBlock.match, '').trim();
+    }
+    const learnBlock = extractTagBlock(response, 'LEARN');
+    let learnUpdate = null;
+    if (learnBlock) {
+        try { learnUpdate = JSON.parse(learnBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEARN block:', learnBlock.content, e); }
+        narration = narration.replace(learnBlock.match, '').trim();
+    }
+    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate };
+}
+
+async function summarizeContext() {
+    // Use full chat history for consolidation (up to last 40 messages)
+    const historyToSummarize = state.chatHistory.slice(-40);
+    const text = historyToSummarize.map(m=>`${m.role==='dm'?'DM':'Jugador'}: ${m.content.substring(0,400)}`).join('\n');
+
+    // Include existing longTermMemory as base if it exists
+    const prevMemory = state.gameState.longTermMemory
+        ? `MEMORIA PREVIA:\n${state.gameState.longTermMemory}\n\n`
+        : '';
+
+    const prompt = `${prevMemory}Eres el asistente de memoria de una campaña D&D. Analiza la siguiente sesión y genera un resumen estructurado y preciso. Es CRÍTICO que los nombres de personajes, lugares y NPCs sean exactamente los que aparecen en el texto.
+
+${text}
+
+Responde SOLO en este formato JSON (sin texto adicional):
+{
+  "ubicacion_actual": "nombre exacto del lugar donde está el jugador ahora",
+  "razon_en_ubicacion": "por qué el jugador está aquí, con detalles específicos",
+  "mision_activa": "objetivo principal actual",
+  "npcs_conocidos": [
+    {"nombre": "nombre exacto", "rol": "qué es este personaje", "relacion": "relación con el jugador", "datos_clave": "info importante"}
+  ],
+  "eventos_clave": ["evento 1", "evento 2", "evento 3"],
+  "resumen_narrativo": "2-3 frases resumiendo el arco de la historia hasta ahora"
+}`;
+
+    try {
+        const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method:'POST',
+            headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
+            body: JSON.stringify({
+                model:'llama-3.3-70b-versatile',
+                messages:[{role:'user', content:prompt}],
+                temperature:0.2,
+                max_tokens:600
+            })
+        });
+        const d = await r.json();
+        const raw = d.choices[0].message.content.trim();
+
+        // Try to parse structured memory
+        let parsed = null;
+        try {
+            const jsonMatch = raw.match(/\{[\s\S]*\}/);
+            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+        } catch(e) { /* keep parsed as null */ }
+
+        if (parsed) {
+            // Store structured long-term memory
+            state.gameState.longTermMemory = JSON.stringify(parsed);
+            // Also update the short summary for backward compat
+            state.gameState.summary = parsed.resumen_narrativo || state.gameState.summary;
+            state.gameState.longTermMemoryTurn = state.turnCount;
+        } else {
+            // Fallback: store raw text
+            state.gameState.longTermMemory = raw;
+            state.gameState.summary = raw.substring(0, 200);
+        }
+
+        // Only trim chat history AFTER we've consolidated it
+        // Keep last 20 messages as short-term memory window
+        if (state.chatHistory.length > 40) {
+            state.chatHistory = state.chatHistory.slice(-20);
+        }
+
+        // Update memory indicator in UI
+        updateMemoryIndicator();
