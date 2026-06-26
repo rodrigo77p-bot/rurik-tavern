@@ -2688,45 +2688,75 @@ function processNpcUpdate(update) {
     if (panel) renderNpcModalContent();
 }
 
+// Extracts a [TAG: content] block from text, correctly handling nested brackets/braces and strings.
+// Returns { match: fullMatchString, content: innerContentString } or null.
+function extractTagBlock(text, tag) {
+    const prefix = '[' + tag + ':';
+    const idx = text.indexOf(prefix);
+    if (idx === -1) return null;
+    let i = idx + prefix.length;
+    while (i < text.length && (text[i] === ' ' || text[i] === '\n')) i++;
+    const contentStart = i;
+    let depth = 0, braceDepth = 0, inString = false, escape = false;
+    while (i < text.length) {
+        const c = text[i];
+        if (escape) { escape = false; i++; continue; }
+        if (c === '\\' && inString) { escape = true; i++; continue; }
+        if (c === '"') { inString = !inString; i++; continue; }
+        if (inString) { i++; continue; }
+        if (c === '{') braceDepth++;
+        else if (c === '}') { braceDepth--; }
+        else if (c === '[') depth++;
+        else if (c === ']') {
+            if (depth === 0 && braceDepth === 0) {
+                return { match: text.slice(idx, i + 1), content: text.slice(contentStart, i).trim() };
+            }
+            depth--;
+        }
+        i++;
+    }
+    return null;
+}
+
 function parseLlmResponse(response) {
     let narration = response;
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
-    const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\])\]/);
-    if (actionsMatch) {
-        try { actions = JSON.parse(actionsMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ACTIONS block:', actionsMatch[1], e); }
-        narration = narration.replace(actionsMatch[0],'').trim();
+    const actionsBlock = extractTagBlock(response, 'ACTIONS');
+    if (actionsBlock) {
+        try { actions = JSON.parse(actionsBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ACTIONS block:', actionsBlock.content, e); }
+        narration = narration.replace(actionsBlock.match, '').trim();
     }
-    const stateMatch = response.match(/\[STATE:\s*(\{[^\]]*\})\]/);
-    if (stateMatch) {
-        try { stateUpdates = JSON.parse(stateMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse STATE block:', stateMatch[1], e); }
-        narration = narration.replace(stateMatch[0],'').trim();
+    const stateBlock = extractTagBlock(response, 'STATE');
+    if (stateBlock) {
+        try { stateUpdates = JSON.parse(stateBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse STATE block:', stateBlock.content, e); }
+        narration = narration.replace(stateBlock.match, '').trim();
     }
-    const legacyMatch = response.match(/\[LEGACY:\s*(\{[^\]]*\})\]/);
-    if (legacyMatch) {
-        try { legacy = JSON.parse(legacyMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEGACY block:', legacyMatch[1], e); }
-        narration = narration.replace(legacyMatch[0],'').trim();
+    const legacyBlock = extractTagBlock(response, 'LEGACY');
+    if (legacyBlock) {
+        try { legacy = JSON.parse(legacyBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEGACY block:', legacyBlock.content, e); }
+        narration = narration.replace(legacyBlock.match, '').trim();
     }
-    const rollMatch = response.match(/\[ROLL:\s*(\{[^\]]*\})\]/);
-    if (rollMatch) {
+    const rollBlock = extractTagBlock(response, 'ROLL');
+    if (rollBlock) {
         try {
-            const r = JSON.parse(rollMatch[1]);
+            const r = JSON.parse(rollBlock.content);
             rollRequest = { skill: r.skill || 'Habilidad', stat: r.stat || guessStatFromSkill(r.skill || ''), dc: parseInt(r.dc) || 12, reason: r.reason || '' };
-        } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ROLL block:', rollMatch[1], e); }
-        narration = narration.replace(rollMatch[0],'').trim();
+        } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ROLL block:', rollBlock.content, e); }
+        narration = narration.replace(rollBlock.match, '').trim();
     }
     if (stateUpdates?.hp <= 0) { deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200); }
-    const npcMatch = response.match(/\[NPC:\s*(\{[^\]]*\})\]/);
+    const npcBlock = extractTagBlock(response, 'NPC');
     let npcUpdate = null;
-    if (npcMatch) {
-        try { npcUpdate = JSON.parse(npcMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse NPC block:', npcMatch[1], e); }
-        narration = narration.replace(npcMatch[0],'').trim();
+    if (npcBlock) {
+        try { npcUpdate = JSON.parse(npcBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse NPC block:', npcBlock.content, e); }
+        narration = narration.replace(npcBlock.match, '').trim();
     }
-    const learnMatch = response.match(/\[LEARN:\s*(\{[^\]]*\})\]/);
+    const learnBlock = extractTagBlock(response, 'LEARN');
     let learnUpdate = null;
-    if (learnMatch) {
-        try { learnUpdate = JSON.parse(learnMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEARN block:', learnMatch[1], e); }
-        narration = narration.replace(learnMatch[0],'').trim();
+    if (learnBlock) {
+        try { learnUpdate = JSON.parse(learnBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEARN block:', learnBlock.content, e); }
+        narration = narration.replace(learnBlock.match, '').trim();
     }
     return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate };
 }
