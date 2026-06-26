@@ -2692,41 +2692,40 @@ function parseLlmResponse(response) {
     let narration = response;
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
-    const actionsMatch = response.match(/\[ACTIONS:\s*(\[\s\S]*?\]+)\]?/);
+    const actionsMatch = response.match(/\[ACTIONS:\s*(\[[\s\S]*?\])\]/);
     if (actionsMatch) {
-        try { const jsonStr = actionsMatch[1].replace(/\]+$/, ']'); actions = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ACTIONS block:', actionsMatch[1], e); }
+        try { actions = JSON.parse(actionsMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ACTIONS block:', actionsMatch[1], e); }
         narration = narration.replace(actionsMatch[0],'').trim();
     }
-    const stateMatch = response.match(/\[STATE:\s*(\{[\s\S]*?\}+)\]?/);
+    const stateMatch = response.match(/\[STATE:\s*(\{[^\]]*\})\]/);
     if (stateMatch) {
-        try { const jsonStr = stateMatch[1].replace(/\}+$/, '}'); stateUpdates = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse STATE block:', stateMatch[1], e); }
+        try { stateUpdates = JSON.parse(stateMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse STATE block:', stateMatch[1], e); }
         narration = narration.replace(stateMatch[0],'').trim();
     }
-    const legacyMatch = response.match(/\[LEGACY:\s*(\{[\s\S]*?\}+)\]?/);
+    const legacyMatch = response.match(/\[LEGACY:\s*(\{[^\]]*\})\]/);
     if (legacyMatch) {
-        try { const jsonStr = legacyMatch[1].replace(/\}+$/, '}'); legacy = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEGACY block:', legacyMatch[1], e); }
+        try { legacy = JSON.parse(legacyMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEGACY block:', legacyMatch[1], e); }
         narration = narration.replace(legacyMatch[0],'').trim();
     }
-    const rollMatch = response.match(/\[ROLL:\s*(\{[\s\S]*?\}+)\]?/);
+    const rollMatch = response.match(/\[ROLL:\s*(\{[^\]]*\})\]/);
     if (rollMatch) {
         try {
-            const jsonStr = rollMatch[1].replace(/\}+$/, '}');
-            const r = JSON.parse(jsonStr);
+            const r = JSON.parse(rollMatch[1]);
             rollRequest = { skill: r.skill || 'Habilidad', stat: r.stat || guessStatFromSkill(r.skill || ''), dc: parseInt(r.dc) || 12, reason: r.reason || '' };
         } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ROLL block:', rollMatch[1], e); }
         narration = narration.replace(rollMatch[0],'').trim();
     }
     if (stateUpdates?.hp <= 0) { deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200); }
-    const npcMatch = response.match(/\[NPC:\s*(\{[\s\S]*?\}+)\]?/);
+    const npcMatch = response.match(/\[NPC:\s*(\{[^\]]*\})\]/);
     let npcUpdate = null;
     if (npcMatch) {
-        try { const jsonStr = npcMatch[1].replace(/\}+$/, '}'); npcUpdate = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse NPC block:', npcMatch[1], e); }
+        try { npcUpdate = JSON.parse(npcMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse NPC block:', npcMatch[1], e); }
         narration = narration.replace(npcMatch[0],'').trim();
     }
-    const learnMatch = response.match(/\[LEARN:\s*(\{[\s\S]*?\}+)\]?/);
+    const learnMatch = response.match(/\[LEARN:\s*(\{[^\]]*\})\]/);
     let learnUpdate = null;
     if (learnMatch) {
-        try { const jsonStr = learnMatch[1].replace(/\}+$/, '}'); learnUpdate = JSON.parse(jsonStr); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEARN block:', learnMatch[1], e); }
+        try { learnUpdate = JSON.parse(learnMatch[1]); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEARN block:', learnMatch[1], e); }
         narration = narration.replace(learnMatch[0],'').trim();
     }
     return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate };
