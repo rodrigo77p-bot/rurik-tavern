@@ -1014,7 +1014,16 @@ function bindChat() {
         // If no roll needed, proceed normally
         playerInput.disabled = true; sendBtn.disabled = true; sendBtn.textContent = '...';
         addPlayerMessage(action, null, 'done', state.chatHistory.length);
-        await callAndRespond(action, null);
+        console.log('[sendMessage] calling callAndRespond with action:', action.slice(0, 50));
+        try {
+            await callAndRespond(action, null);
+        } catch(err) {
+            console.error('[sendMessage] callAndRespond threw:', err);
+            addDMMessage('Error inesperado al procesar tu acción. Inténtalo de nuevo. (' + err.message + ')');
+            playerInput.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Enviar';
+        }
     }
 
     // Expose sendMessage globally so useAction can call it directly
