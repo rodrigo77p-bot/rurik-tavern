@@ -140,7 +140,7 @@ async function callAndRespond(action, rollResult) {
             errorMessage += ` (Detalles: ${err.message})`;
         }
 
-        addDMMessage(errorMessage, [isUserActionable ? ['Intentarlo de nuevo', 'Cambiar acción', 'Ver ayuda'] : []]);
+        addDMMessage(errorMessage, isUserActionable ? ['Intentarlo de nuevo', 'Cambiar acción', 'Ver ayuda'] : []);
     } finally {
         if (playerInput) { playerInput.disabled = false; }
         if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
