@@ -2819,7 +2819,7 @@ SISTEMA DE DADOS (CRÍTICO — SIGUE ESTO SIEMPRE):
 CASI TODA acción requiere tirada. Pide [ROLL] SIEMPRE en estos casos:
 - Hablar con alguien con intención (convencer, seducir, intimidar, mentir, pedir favor, flirtear) → CAR
 - Atacar, pelear, golpear, disparar → FUE (o DES si es a distancia/sigilo)
-- Esconderse, moverse sin ser visto, robar → DES  
+- Esconderse, moverse sin ser visto, robar → DES
 - Lanzar magia, hechizos, conjuros → INT
 - Buscar algo, investigar, examinar → SAB o INT
 - Percibir peligro, intuir mentiras, detectar algo → SAB
