@@ -26,49 +26,6 @@ async function callAndRespond(action, rollResult) {
             console.log('PARSED IA RESPONSE:', { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate });
         }
 
-        // Fallback: if IA didn't request a roll but we think it should have, try again with more explicit instructions
-        if (!rollRequest) {
-            const suggestedRoll = guessRequiredRoll(action);
-            // Backup detection for perception/action keywords that might be missed by guessRequiredRoll
-            const actionLower = action.toLowerCase();
-            const strongPerceptionRoots = ['escuch', 'oir', 'ver', 'mir', 'detect', 'sent', 'percib', 'intui'];
-            const hasStrongKeyword = strongPerceptionRoots.some(root => actionLower.includes(root));
-
-            if (suggestedRoll || hasStrongKeyword) {
-                // If we have a suggested roll from guessRequiredRoll, use it
-                // Otherwise, default to Perception SAB for common perception actions
-                const rollToUse = suggestedRoll || { skill: 'Percepción', stat: 'SAB' };
-                // Create a more insistent user prompt that explicitly asks for a roll
-                const insistentAction = `${action}\n\nIMPORTANTE: Esta acción claramente requiere una tirada de dados. Por favor, incluye un bloque [ROLL:] en tu respuesta con la skill '${rollToUse.skill}', stat '${rollToUse.stat}', dc apropiado y razón.`;
-                const insistentResponse = await Promise.race([callGroqApi(insistentAction, rollResult), timeoutPromise]);
-
-                // Debug logging
-                if (DEBUG_IA_COMMUNICATION) {
-                    console.log('IA RESPONSE TO INSISTENT PROMPT:', insistentResponse);
-                }
-
-                const { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate, learnUpdate: insistentLearnUpdate } = parseLlmResponse(insistentResponse);
-
-                // Debug logging
-                if (DEBUG_IA_COMMUNICATION) {
-                    console.log('PARSED INSISTENT IA RESPONSE:', { narration: insistentNarration, stateUpdates: insistentStateUpdates, actions: insistentActions, legacy: insistentLegacy, deathNarration: insistentDeathNarration, rollRequest: insistentRollRequest, npcUpdate: insistentNpcUpdate, learnUpdate: insistentLearnUpdate });
-                }
-
-                // Use the insistent response if it provided a roll request, otherwise stick with original
-                if (insistentRollRequest) {
-                    narration = insistentNarration;
-                    stateUpdates = insistentStateUpdates;
-                    actions = insistentActions;
-                    legacy = insistentLegacy;
-                    deathNarration = insistentDeathNarration;
-                    rollRequest = insistentRollRequest;
-                    npcUpdate = insistentNpcUpdate;
-                    learnUpdate = insistentLearnUpdate;
-                    if (insistentNpcUpdate) processNpcUpdate(insistentNpcUpdate);
-                }
-            }
-        }
-
         if (npcUpdate) processNpcUpdate(npcUpdate);
         if (learnUpdate) processLearnUpdate(learnUpdate);
         document.getElementById('typingIndicator')?.remove();
