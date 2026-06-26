@@ -1240,6 +1240,7 @@ function renderChatScreen() {
             <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
             <button class="modal-btn" id="knowledgeMenuBtn">📖 Conocimientos y Habilidades</button>
             <button class="modal-btn" id="viewLegacyBtn">📜 Ver Legado del Mundo</button>
+            <button class="modal-btn" id="viewMemoryBtn">🧠 Ver Memoria de la Historia</button>
             <button class="modal-btn" id="logoutBtn">🚪 Cerrar Sesión</button>
             <button class="modal-btn danger" id="closeMenuBtn">✕ Cerrar</button>
         </div></div>
@@ -1259,6 +1260,11 @@ function renderChatScreen() {
             <div class="modal-title">📜 Legado del Mundo</div>
             <div id="legacyList" class="legacy-modal-list"></div>
             <button class="modal-btn" id="closeLegacyBtn" style="margin-top:0.5rem">✓ Cerrar</button>
+        </div></div>
+        <div id="memoryModal" class="modal hidden"><div class="modal-box" style="max-width:520px;max-height:80vh;overflow-y:auto">
+            <div class="modal-title">🧠 Memoria de la Historia</div>
+            <div id="memoryModalContent" style="font-size:0.82rem;color:var(--text-muted);line-height:1.7"></div>
+            <button class="modal-btn" id="closeMemoryBtn" style="margin-top:0.75rem">✓ Cerrar</button>
         </div></div>
         <div id="deathModal" class="modal hidden"><div class="modal-box" style="text-align:center">
             <div style="font-size:3rem;margin-bottom:0.5rem">💀</div>
@@ -1307,7 +1313,9 @@ function renderChatScreen() {
                     <input type="text" id="playerInput" placeholder="¿Qué haces?" autocomplete="off">
                     <button class="btn" id="sendBtn">Enviar</button>
                 </div>
-                <p class="footer-note">El contexto se resume automáticamente cada 10 turnos</p>
+                <div class="memory-bar">
+                    <span id="memoryIndicator" style="cursor:pointer" onclick="openMemoryModal()">💬 0 turnos en memoria</span>
+                </div>
             </div>
             <aside class="party-panel" id="partyPanel"></aside>
         </div>
@@ -1685,7 +1693,7 @@ window.saveNpcNotes = function(idx, text) {
 function bindChat() {
     const playerInput = document.getElementById('playerInput');
     const sendBtn = document.getElementById('sendBtn');
-    renderChat(); updatePartyPanel(); updateStatus();
+    renderChat(); updatePartyPanel(); updateStatus(); updateMemoryIndicator();
     playerInput.focus();
 
     async function sendMessage() {
@@ -1827,12 +1835,18 @@ function bindChat() {
     document.getElementById('viewLegacyBtn').addEventListener('click', () => {
         document.getElementById('menuModal').classList.add('hidden'); openLegacyModal();
     });
+    document.getElementById('viewMemoryBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden'); openMemoryModal();
+    });
 
     // Inventory
     document.getElementById('closeInvBtn').addEventListener('click', () => document.getElementById('inventoryModal').classList.add('hidden'));
 
     // Legacy
     document.getElementById('closeLegacyBtn').addEventListener('click', () => document.getElementById('legacyModal').classList.add('hidden'));
+
+    // Memory
+    document.getElementById('closeMemoryBtn').addEventListener('click', () => document.getElementById('memoryModal').classList.add('hidden'));
 
     // Companion chat
     document.getElementById('closeCompanionChatBtn').addEventListener('click', () => document.getElementById('companionChatModal').classList.add('hidden'));
@@ -2018,6 +2032,54 @@ function openLegacyModal() {
     modal.classList.remove('hidden');
 }
 
+function openMemoryModal() {
+    const modal = document.getElementById('memoryModal');
+    const content = document.getElementById('memoryModalContent');
+    const turns = state.chatHistory.length;
+    const hasLTM = !!state.gameState.longTermMemory;
+    const ltmTurn = state.gameState.longTermMemoryTurn || 0;
+
+    let html = `<div style="margin-bottom:0.75rem;padding:0.5rem 0.75rem;border-radius:6px;background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.2)">
+        <strong style="color:var(--accent)">Estado de la memoria</strong><br>
+        💬 <strong>${turns}</strong> turnos en memoria activa (conversación reciente)<br>
+        ${hasLTM
+            ? `📜 Memoria consolidada activa — generada en turno ${ltmTurn}`
+            : `⚠️ Sin memoria consolidada aún (se genera cada 10 turnos)`}
+    </div>`;
+
+    if (hasLTM) {
+        try {
+            const parsed = JSON.parse(state.gameState.longTermMemory);
+            html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">📍 Ubicación registrada</strong><br>${parsed.ubicacion_actual || '—'}</div>`;
+            html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">🎯 Razón de estar aquí</strong><br>${parsed.razon_en_ubicacion || '—'}</div>`;
+            html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">⚔️ Misión activa</strong><br>${parsed.mision_activa || '—'}</div>`;
+            if (parsed.npcs_conocidos && parsed.npcs_conocidos.length > 0) {
+                html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">🎭 NPCs registrados</strong><br>`;
+                html += parsed.npcs_conocidos.map(n =>
+                    `<div style="padding:0.3rem 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+                        <strong>${n.nombre}</strong> · ${n.rol}<br>
+                        <span style="color:#aaa">${n.datos_clave || ''}</span>
+                    </div>`
+                ).join('');
+                html += `</div>`;
+            }
+            if (parsed.eventos_clave && parsed.eventos_clave.length > 0) {
+                html += `<div style="margin-bottom:0.5rem"><strong style="color:var(--accent)">📋 Eventos clave</strong><br>`;
+                html += parsed.eventos_clave.map(e => `<div style="padding:0.2rem 0">· ${e}</div>`).join('');
+                html += `</div>`;
+            }
+            html += `<div style="margin-top:0.5rem;font-style:italic;color:#aaa">${parsed.resumen_narrativo || ''}</div>`;
+        } catch(e) {
+            html += `<pre style="white-space:pre-wrap;font-size:0.78rem">${state.gameState.longTermMemory}</pre>`;
+        }
+    } else {
+        html += `<div style="color:#888;font-style:italic">La memoria se consolidará automáticamente en el turno ${10 - (turns % 10)} siguiente. Hasta entonces, la IA trabaja con los últimos 30 turnos de conversación directa.</div>`;
+    }
+
+    content.innerHTML = html;
+    modal.classList.remove('hidden');
+}
+
 // ===================== DEATH SYSTEM =====================
 function triggerDeath(deathNote) {
     const char = state.character;
@@ -2120,6 +2182,7 @@ function updateStatus() {
         const xpProgress = (state.character.experience / xpForNextLevel) * 100;
         el('levelDisplay').textContent = `Nivel ${state.character.level} (${state.character.experience}/${xpForNextLevel} XP) ${state.character.skillPoints > 0 ? `[${state.character.skillPoints} pts]` : ''}`;
     }
+    updateMemoryIndicator();
 }
 
 function openPartyModal() {
@@ -2429,6 +2492,29 @@ function buildPrompt(playerAction, rollResult) {
         const ab = statMap[rollResult.skill]||'SAB';
         rollSection = `\nTIRADA: ${rollResult.skill} — d20(${rollResult.roll}) ${fmod(ab)} = ${rollResult.total} vs DC ${rollResult.dc} → ${rollResult.success?'ÉXITO':'FALLO'}`;
     }
+    // Long-term memory section (consolidated history anchor)
+    let longTermSection = '';
+    if (state.gameState.longTermMemory) {
+        let ltm = state.gameState.longTermMemory;
+        try {
+            const parsed = JSON.parse(ltm);
+            const npcsStr = (parsed.npcs_conocidos || []).map(n =>
+                `  · ${n.nombre} (${n.rol}): ${n.datos_clave || ''}`
+            ).join('\n');
+            const eventsStr = (parsed.eventos_clave || []).map(e => `  · ${e}`).join('\n');
+            longTermSection = `\nMEMORIA CONSOLIDADA (INMUTABLE — ESTOS HECHOS SON VERDAD Y NO CAMBIAN):
+- Ubicación actual: ${parsed.ubicacion_actual || ''}
+- Razón de estar aquí: ${parsed.razon_en_ubicacion || ''}
+- Misión: ${parsed.mision_activa || ''}
+- NPCs conocidos con sus nombres EXACTOS:\n${npcsStr || '  (ninguno registrado)'}
+- Eventos clave ocurridos:\n${eventsStr || '  (ninguno)'}
+- Historia hasta ahora: ${parsed.resumen_narrativo || ''}`;
+        } catch(e) {
+            // Fallback: include raw text
+            longTermSection = `\nMEMORIA CONSOLIDADA (INMUTABLE):\n${ltm.substring(0, 600)}`;
+        }
+    }
+
     const worldEvents = getEventsForLocation(state.gameState.location);
     const worldSection = worldEvents.length > 0 ? `\nHISTORIA DEL MUNDO EN ESTA ZONA:\n${worldEvents.map(e=>`- ${e.event}`).join('\n')}` : '';
     const companions = (state.gameState.companions||[]).map(c=>`- ${c.name} (${c.role||'aliado'}, PV ${c.hp}/${c.maxHp})`).join('\n')||'ninguno';
@@ -2463,10 +2549,12 @@ PERSONAJE:
 - FUE ${stats.FUE}(${fmod('FUE')}), DES ${stats.DES}(${fmod('DES')}), CON ${stats.CON}(${fmod('CON')}), INT ${stats.INT}(${fmod('INT')}), SAB ${stats.SAB}(${fmod('SAB')}), CAR ${stats.CAR}(${fmod('CAR')})
 ${curseNote}
 
-HISTORIAL RECIENTE:
+${longTermSection}
+
+HISTORIAL RECIENTE (últimos turnos):
 ${getRecentHistory()}
 
-ESTADO:
+ESTADO ACTUAL:
 - Ubicación: ${state.gameState.location} | Hora: ${state.gameState.timeOfDay}
 - HP: ${state.gameState.hp}/${state.gameState.maxHp}
 - Inventario: ${state.gameState.inventory.join(', ')||'vacío'}
@@ -2478,6 +2566,9 @@ ${worldSection}${rollSection}
 ${classRulesSection}
 INSTRUCCIONES:
 - **REGLA DE OBLIGATORIO CUMPLIMIENTO**: Cuando veas "[ACTION SELECCIONADA] X" en el prompt del usuario, debes interpretar "X" como la acción que el personaje ha seleccionado realizar. Describe las consecuencias de esa acción sin repetir literalmente "X". Muestra lo que sucede como resultado de esa elección.
+- **CONSISTENCIA NARRATIVA — NUNCA ROMPER**: Los nombres de personajes, NPCs y lugares ya establecidos en la conversación NO cambian. Si Gorin fue presentado como soldado, sigue siendo soldado. Si el lord se llama Harrington, sigue llamándose Harrington. Si el jugador está en el castillo por una razón específica, esa razón no cambia ni se olvida.
+- **CONTINUIDAD DE ESCENA**: Si el jugador acaba de seguir a alguien o entrar a un lugar, la siguiente respuesta ocurre en ese lugar con esos personajes. No introduzcas personajes nuevos sin lógica narrativa.
+- **MOTIVO DEL JUGADOR**: El resumen y el contexto indican por qué el jugador está en un lugar. Mantenlo siempre presente en la narración.
 - 60-120 palabras de narración. Conciso, cinematográfico, sin descripciones de entorno innecesarias. Ve al grano.
 - NPCs con nombres y personalidad consistente. Los eventos del mundo son REALES y visibles.
 - Si hay historia del mundo en esta zona, inclúyela naturalmente.
@@ -2541,10 +2632,45 @@ Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo 
 
 async function callGroqApi(playerAction, rollResult) {
     const { system, user } = buildPrompt(playerAction, rollResult);
+
+    // Build conversation history for the model.
+    // If we have consolidated long-term memory, we only need recent turns
+    // (the LTM in the system prompt covers earlier context).
+    // Without LTM, send more turns to compensate.
+    const historyMessages = [];
+    const windowSize = state.gameState.longTermMemory ? 14 : 30;
+    const recentHistory = state.chatHistory.slice(-windowSize);
+    for (const msg of recentHistory) {
+        if (msg.role === 'player') {
+            historyMessages.push({ role: 'user', content: msg.content });
+        } else if (msg.role === 'dm') {
+            // Strip [STATE:], [ACTIONS:], [ROLL:], [NPC:] blocks from assistant messages
+            // to keep token count manageable while preserving narrative
+            const cleanContent = msg.content
+                .replace(/\[STATE:[\s\S]*?\]/g, '')
+                .replace(/\[ACTIONS:[\s\S]*?\]/g, '')
+                .replace(/\[ROLL:[\s\S]*?\]/g, '')
+                .replace(/\[NPC:[\s\S]*?\]/g, '')
+                .replace(/\[LEGACY:[\s\S]*?\]/g, '')
+                .replace(/\[LEARN:[\s\S]*?\]/g, '')
+                .trim();
+            if (cleanContent) historyMessages.push({ role: 'assistant', content: cleanContent });
+        }
+    }
+
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method:'POST',
         headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
-        body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:[{role:'system',content:system},{role:'user',content:user}], temperature:0.7, max_tokens:1000 })
+        body: JSON.stringify({
+            model:'llama-3.3-70b-versatile',
+            messages:[
+                {role:'system',content:system},
+                ...historyMessages,
+                {role:'user',content:user}
+            ],
+            temperature:0.7,
+            max_tokens:1000
+        })
     });
     if (!response.ok) { const e = await response.text(); throw new Error(`Groq ${response.status}: ${e}`); }
     const data = await response.json();
@@ -2762,19 +2888,90 @@ function parseLlmResponse(response) {
 }
 
 async function summarizeContext() {
-    const text = state.chatHistory.slice(-16).map(m=>`${m.role==='dm'?'DM':'Jugador'}: ${m.content}`).join('\n');
+    // Use full chat history for consolidation (up to last 40 messages)
+    const historyToSummarize = state.chatHistory.slice(-40);
+    const text = historyToSummarize.map(m=>`${m.role==='dm'?'DM':'Jugador'}: ${m.content.substring(0,400)}`).join('\n');
+
+    // Include existing longTermMemory as base if it exists
+    const prevMemory = state.gameState.longTermMemory
+        ? `MEMORIA PREVIA:\n${state.gameState.longTermMemory}\n\n`
+        : '';
+
+    const prompt = `${prevMemory}Eres el asistente de memoria de una campaña D&D. Analiza la siguiente sesión y genera un resumen estructurado y preciso. Es CRÍTICO que los nombres de personajes, lugares y NPCs sean exactamente los que aparecen en el texto.
+
+${text}
+
+Responde SOLO en este formato JSON (sin texto adicional):
+{
+  "ubicacion_actual": "nombre exacto del lugar donde está el jugador ahora",
+  "razon_en_ubicacion": "por qué el jugador está aquí, con detalles específicos",
+  "mision_activa": "objetivo principal actual",
+  "npcs_conocidos": [
+    {"nombre": "nombre exacto", "rol": "qué es este personaje", "relacion": "relación con el jugador", "datos_clave": "info importante"}
+  ],
+  "eventos_clave": ["evento 1", "evento 2", "evento 3"],
+  "resumen_narrativo": "2-3 frases resumiendo el arco de la historia hasta ahora"
+}`;
+
     try {
         const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method:'POST',
             headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
-            body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:[{role:'user',content:`Resume en 2 frases los eventos clave de esta sesión de D&D:\n\n${text}`}], temperature:0.3, max_tokens:120 })
+            body: JSON.stringify({
+                model:'llama-3.3-70b-versatile',
+                messages:[{role:'user', content:prompt}],
+                temperature:0.2,
+                max_tokens:600
+            })
         });
         const d = await r.json();
-        state.gameState.summary = d.choices[0].message.content.trim();
-        if (state.chatHistory.length > 30) state.chatHistory = state.chatHistory.slice(-20);
+        const raw = d.choices[0].message.content.trim();
+
+        // Try to parse structured memory
+        let parsed = null;
+        try {
+            const jsonMatch = raw.match(/\{[\s\S]*\}/);
+            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+        } catch(e) { /* keep parsed as null */ }
+
+        if (parsed) {
+            // Store structured long-term memory
+            state.gameState.longTermMemory = JSON.stringify(parsed);
+            // Also update the short summary for backward compat
+            state.gameState.summary = parsed.resumen_narrativo || state.gameState.summary;
+            state.gameState.longTermMemoryTurn = state.turnCount;
+        } else {
+            // Fallback: store raw text
+            state.gameState.longTermMemory = raw;
+            state.gameState.summary = raw.substring(0, 200);
+        }
+
+        // Only trim chat history AFTER we've consolidated it
+        // Keep last 20 messages as short-term memory window
+        if (state.chatHistory.length > 40) {
+            state.chatHistory = state.chatHistory.slice(-20);
+        }
+
+        // Update memory indicator in UI
+        updateMemoryIndicator();
+        saveGameStateFor(state.activeCharId, state.gameState);
     } catch(e) {
         console.warn('Error al resumir el contexto (no crítico):', e);
     }
+}
+
+function updateMemoryIndicator() {
+    const el = document.getElementById('memoryIndicator');
+    if (!el) return;
+    const turns = state.chatHistory.length;
+    const hasLTM = !!state.gameState.longTermMemory;
+    el.innerHTML = hasLTM
+        ? `📜 <span title="Historia consolidada activa">${turns} turnos · memoria ✓</span>`
+        : `💬 ${turns} turnos en memoria`;
+    el.style.color = hasLTM ? '#c9a84c' : '#888';
+    el.title = hasLTM
+        ? 'Historia consolidada activa — los eventos anteriores están guardados de forma estructurada'
+        : 'Solo memoria reciente activa';
 }
 
 loadFirebaseSDK().then(() => init()).catch(() => init());
