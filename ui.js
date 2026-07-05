@@ -244,7 +244,7 @@ function openMemoryModal() {
         💬 <strong>${turns}</strong> turnos en memoria activa (conversación reciente)<br>
         ${hasLTM
             ? `📜 Memoria consolidada activa — generada en turno ${ltmTurn}`
-            : `⚠️ Sin memoria consolidada aún (se genera cada 10 turnos)`}
+            : `⚠️ Sin memoria consolidada aún (se genera al acumular 20 mensajes y se reintenta cada turno)`}
     </div>`;
 
     if (hasLTM) {

@@ -140,7 +140,11 @@ async function callAndRespond(action, rollResult) {
         }
 
         state.turnCount++;
-        if (state.turnCount % 10 === 0) await summarizeContext();
+        // FIX memoria: antes era turnCount % 10, pero turnCount se resetea a 0 en cada
+        // recarga de página → con sesiones cortas NUNCA consolidaba. Ahora se basa en el
+        // historial persistido y se reintenta cada turno hasta conseguirlo.
+        const sinceLTM = state.chatHistory.length - (state.gameState.lastConsolidatedAt || 0);
+        if (sinceLTM >= 20) await summarizeContext();
         saveChatHistoryFor(state.activeCharId, state.chatHistory);
         saveGameStateFor(state.activeCharId, state.gameState);
     } catch(err) {
@@ -669,6 +673,8 @@ Responde SOLO en este formato JSON (sin texto adicional):
         if (state.chatHistory.length > 40) {
             state.chatHistory = state.chatHistory.slice(-20);
         }
+        // Marcar hasta dónde se ha consolidado (persistido en gameState)
+        state.gameState.lastConsolidatedAt = state.chatHistory.length;
 
         // Update memory indicator in UI
         updateMemoryIndicator();
