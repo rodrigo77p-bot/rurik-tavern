@@ -290,7 +290,12 @@ function loadCharacter(charId) {
     // If saved with 0 HP but still alive (closed app while dying) → stabilized at 1 HP
     if (state.gameState.hp <= 0 && state.character.status === 'alive') state.gameState.hp = 1;
     state.dying = null;
-    state.chatHistory = getChatHistory(charId);
+    // Sanear mensajes del DM guardados con fragmentos JSON de turnos con formato roto
+    state.chatHistory = getChatHistory(charId).map(m =>
+        (m.role === 'dm' && typeof sanitizeStoredMessage === 'function')
+            ? { ...m, content: sanitizeStoredMessage(m.content) }
+            : m
+    );
     state.adventure = getAdventure(charId);
     state.turnCount = 0;
     state.pendingRoll = null;

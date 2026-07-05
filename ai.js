@@ -516,6 +516,36 @@ function normalizeTags(text) {
     return t;
 }
 
+// Fragmentos de JSON del estado que escaparon al parser (p. ej. un bloque
+// STATE sin la '{' inicial deja su cola en la narración). Se elimina toda
+// línea con solo corchetes, con 2+ claves conocidas del protocolo, o que sea puro "clave": valor.
+const STATE_KEYS_RE = /"(hp|maxHp|location|timeOfDay|inventory|quest|summary|companions|relationships|curse|skill|stat|dc|reason|adv|name|race|role|gender|personality|biases|maxRelationship|relationship|fact|goodMemory|badMemory|lastSeen|portraitHint|start|enemies|end|outcome|add|remove|id|title|status|note|event|type|amount|ref|attackBonus|damage|xp|turns)"\s*:/g;
+function stripJsonFragments(text) {
+    let t = text.replace(/^[ \t]*[\[\]\{\}\/]+[ \t]*$/gm, '');
+    t = t.split('\n').filter(line => {
+        const l = line.trim();
+        if (!l) return true;
+        const keyCount = (l.match(STATE_KEYS_RE) || []).length;
+        if (keyCount >= 2) return false;                                       // fragmento JSON claro
+        if (keyCount === 1 && /^[,\{\[]?\s*"[\w]+"\s*:/.test(l)) return false; // línea "clave": valor suelta
+        return true;
+    }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    return t;
+}
+
+// Limpieza retroactiva de mensajes ya guardados en partidas anteriores:
+// normaliza etiquetas traducidas, extrae/borra cualquier bloque completo
+// y elimina fragmentos JSON que quedaron incrustados en la narración.
+function sanitizeStoredMessage(text) {
+    if (!text || typeof text !== 'string') return text;
+    let t = normalizeTags(text);
+    for (const tag of ['STATE','ACTIONS','ROLL','NPC','LEGACY','LEARN','COMBAT','GOLD','QUEST','CONDITION']) {
+        let block;
+        while ((block = extractTagBlock(t, tag))) t = t.replace(block.match, '').trim();
+    }
+    return stripJsonFragments(t);
+}
+
 function parseLlmResponse(response) {
     response = normalizeTags(response);
     let narration = response;
@@ -566,21 +596,8 @@ function parseLlmResponse(response) {
     const goldUpdates = extractAll('GOLD');
     const conditionUpdate = extractAll('CONDITION')[0] || null;
 
-    // Limpieza final: líneas que quedaron con solo corchetes/llaves sueltas
-    narration = narration.replace(/^[ \t]*[\[\]\{\}\/]+[ \t]*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
-
-    // Fragmentos de JSON del estado que escaparon al parser (p. ej. un bloque
-    // STATE sin la '{' inicial deja su cola en la narración). Se elimina toda
-    // línea que contenga 2+ claves conocidas del protocolo, o que sea puro "clave": valor.
-    const STATE_KEYS = /"(hp|maxHp|location|timeOfDay|inventory|quest|summary|companions|relationships|curse|skill|stat|dc|reason|adv|name|race|role|gender|personality|biases|maxRelationship|relationship|fact|goodMemory|badMemory|lastSeen|portraitHint|start|enemies|end|outcome|add|remove|id|title|status|note|event|type|amount|ref|attackBonus|damage|xp|turns)"\s*:/g;
-    narration = narration.split('\n').filter(line => {
-        const l = line.trim();
-        if (!l) return true;
-        const keyCount = (l.match(STATE_KEYS) || []).length;
-        if (keyCount >= 2) return false;                                  // fragmento JSON claro
-        if (keyCount === 1 && /^[,\{\[]?\s*"[\w]+"\s*:/.test(l)) return false; // línea "clave": valor suelta
-        return true;
-    }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    // Limpieza final de artefactos y fragmentos JSON
+    narration = stripJsonFragments(narration);
 
     return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdates, learnUpdates, questUpdates, combatUpdate, goldUpdates, conditionUpdate };
 }
