@@ -35,7 +35,8 @@ async function callAndRespond(action, rollResult) {
             }
         }
 
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
+        // 90s: los modelos gratuitos de OpenRouter pueden hacer cola y tardar en responder
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 90000));
         let response = await Promise.race([callAiApi(action, rollResult), timeoutPromise]);
 
         // Debug logging
@@ -442,6 +443,7 @@ function extractTagBlock(text, tag) {
     while (i < text.length && (text[i] === ' ' || text[i] === '\n')) i++;
     const contentStart = i;
     let depth = 0, braceDepth = 0, inString = false, escape = false;
+    let jsonEnd = -1; // fin del último objeto/array JSON balanceado dentro del bloque
     while (i < text.length) {
         const c = text[i];
         if (escape) { escape = false; i++; continue; }
@@ -449,17 +451,24 @@ function extractTagBlock(text, tag) {
         if (c === '"') { inString = !inString; i++; continue; }
         if (inString) { i++; continue; }
         if (c === '{') braceDepth++;
-        else if (c === '}') { braceDepth--; }
+        else if (c === '}') { braceDepth--; if (braceDepth === 0 && depth === 0 && jsonEnd === -1) jsonEnd = i + 1; }
         else if (c === '[') depth++;
         else if (c === ']') {
             if (depth === 0 && braceDepth === 0) {
                 return { match: text.slice(idx, i + 1), content: text.slice(contentStart, i).trim() };
             }
             depth--;
+            if (depth === 0 && braceDepth === 0 && jsonEnd === -1) jsonEnd = i + 1;
         }
         i++;
     }
-    return null;
+    // Bloque sin el ']' de cierre (algunos modelos lo omiten): recuperar el JSON
+    // balanceado igualmente para poder procesarlo y limpiarlo de la narración.
+    if (jsonEnd !== -1) {
+        return { match: text.slice(idx, jsonEnd), content: text.slice(contentStart, jsonEnd).trim() };
+    }
+    // Ni siquiera hay JSON completo (respuesta cortada): eliminar el resto del texto.
+    return { match: text.slice(idx), content: text.slice(contentStart).trim() };
 }
 
 function parseLlmResponse(response) {
