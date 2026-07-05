@@ -569,6 +569,19 @@ function parseLlmResponse(response) {
     // Limpieza final: líneas que quedaron con solo corchetes/llaves sueltas
     narration = narration.replace(/^[ \t]*[\[\]\{\}\/]+[ \t]*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
 
+    // Fragmentos de JSON del estado que escaparon al parser (p. ej. un bloque
+    // STATE sin la '{' inicial deja su cola en la narración). Se elimina toda
+    // línea que contenga 2+ claves conocidas del protocolo, o que sea puro "clave": valor.
+    const STATE_KEYS = /"(hp|maxHp|location|timeOfDay|inventory|quest|summary|companions|relationships|curse|skill|stat|dc|reason|adv|name|race|role|gender|personality|biases|maxRelationship|relationship|fact|goodMemory|badMemory|lastSeen|portraitHint|start|enemies|end|outcome|add|remove|id|title|status|note|event|type|amount|ref|attackBonus|damage|xp|turns)"\s*:/g;
+    narration = narration.split('\n').filter(line => {
+        const l = line.trim();
+        if (!l) return true;
+        const keyCount = (l.match(STATE_KEYS) || []).length;
+        if (keyCount >= 2) return false;                                  // fragmento JSON claro
+        if (keyCount === 1 && /^[,\{\[]?\s*"[\w]+"\s*:/.test(l)) return false; // línea "clave": valor suelta
+        return true;
+    }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+
     return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdates, learnUpdates, questUpdates, combatUpdate, goldUpdates, conditionUpdate };
 }
 

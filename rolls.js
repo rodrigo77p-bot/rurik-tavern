@@ -104,8 +104,15 @@ const ACTION_RULES = [
   },
   {
     name: 'combat',
-    keywords: ['atacar', 'pelear', 'golpear', 'disparar', 'lanzar arma', 'herir', 'herida'],
+    keywords: ['atacar', 'pelear', 'golpear', 'disparar', 'lanzar arma', 'herir', 'herida',
+               'apuñal', 'puñalada', 'acuchill', 'degollar', 'estocada', 'tajo', 'patada',
+               'puñetazo', 'embestir', 'esquiv', 'bloquear', 'parar el golpe', 'desviar'],
     determine: (actionLower) => {
+      // Defensa: esquivar/bloquear/desviar es DES, no un ataque
+      if (actionLower.includes('esquiv') || actionLower.includes('bloquear') ||
+          actionLower.includes('parar el golpe') || actionLower.includes('desviar')) {
+        return { skill: 'Esquiva', stat: 'DES', dc: 12, reason: 'Esquivar o bloquear el ataque enemigo' };
+      }
       let skill = 'Ataque';
       let stat = 'FUE';
 
