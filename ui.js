@@ -44,10 +44,10 @@ async function sendCompanionMessage() {
         const char = state.character;
         const recentHistory = companionChats[activeChatCompanion].slice(-10).map(m=>`${m.role==='player'?char.name:companion.name}: ${m.content}`).join('\n');
         const system = `Eres ${companion.name}${companion.role?', '+companion.role:''}. ${companion.description||''}\nEstás en ${state.gameState.location} junto a ${char.name}, ${char.race} ${char.classe}.\nTu relación con ${char.name}: ${rel?.type||'neutral'} (nivel ${rel?.level||0}/5).\nResponde en primera persona, en character, de forma natural y concisa (1-4 frases). Habla en el mismo idioma que ${char.name}.`;
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const response = await fetch(AI_API_URL, {
             method:'POST',
             headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
-            body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:[{role:'system',content:system},{role:'user',content:recentHistory+'\n'+char.name+': '+text}], temperature:0.85, max_tokens:200 })
+            body: JSON.stringify({ model: AI_MODELS[0], models: AI_MODELS, messages:[{role:'system',content:system},{role:'user',content:recentHistory+'\n'+char.name+': '+text}], temperature:0.85, max_tokens:200 })
         });
         const data = await response.json();
         const reply = data.choices[0].message.content.trim().replace(/^[^:]+:\s*/,'');

@@ -36,7 +36,7 @@ async function callAndRespond(action, rollResult) {
         }
 
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
-        let response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
+        let response = await Promise.race([callAiApi(action, rollResult), timeoutPromise]);
 
         // Debug logging
         if (DEBUG_IA_COMMUNICATION) {
@@ -160,19 +160,19 @@ async function callAndRespond(action, rollResult) {
         } else if (err.name === 'TypeError') {
             errorMessage = 'Ocurrió un error inesperado en el procesamiento. Por favor, inténtalo de nuevo.';
             isUserActionable = true;
-        } else if (err.message && err.message.includes('Groq')) {
-            // Handle Groq API specific errors
+        } else if (err.message && err.message.includes('OpenRouter')) {
+            // Handle OpenRouter API specific errors
             if (err.message.includes('401') || err.message.includes('403')) {
-                errorMessage = 'Error de autenticación con la IA. Verifica que tu API key de Groq sea válida y esté correctamente configurada.';
+                errorMessage = 'Error de autenticación con la IA. Verifica que tu API key de OpenRouter sea válida y esté correctamente configurada.';
                 isUserActionable = true;
             } else if (err.message.includes('429')) {
-                errorMessage = 'Has excedido el límite de solicitudes a la IA. Espera un momento antes de intentarlo de nuevo.';
+                errorMessage = 'Has alcanzado el límite diario de peticiones gratuitas de OpenRouter. Espera un poco o carga créditos para ampliar el límite.';
                 isUserActionable = true;
             } else if (err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('504')) {
                 errorMessage = 'El servicio de IA está experimentando problemas técnicos. Por favor, inténtalo de nuevo más tarde.';
                 isUserActionable = true;
             } else {
-                errorMessage = `Error del servicio de IA: ${err.message.replace('Groq ', '')}. Inténtalo de nuevo.`;
+                errorMessage = `Error del servicio de IA: ${err.message.replace('OpenRouter ', '')}. Inténtalo de nuevo.`;
                 isUserActionable = true;
             }
         } else if (err.message && err.message.includes('parseLlmResponse')) {
@@ -380,7 +380,7 @@ Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo 
     return { system, user: userContent };
 }
 
-async function callGroqApi(playerAction, rollResult) {
+async function callAiApi(playerAction, rollResult) {
     const { system, user } = buildPrompt(playerAction, rollResult);
 
     // Build conversation history for the model.
@@ -412,11 +412,12 @@ async function callGroqApi(playerAction, rollResult) {
         }
     }
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await fetch(AI_API_URL, {
         method:'POST',
         headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
         body: JSON.stringify({
-            model:'llama-3.3-70b-versatile',
+            model: AI_MODELS[0],
+            models: AI_MODELS,
             messages:[
                 {role:'system',content:system},
                 ...historyMessages,
@@ -426,7 +427,7 @@ async function callGroqApi(playerAction, rollResult) {
             max_tokens:1000
         })
     });
-    if (!response.ok) { const e = await response.text(); throw new Error(`Groq ${response.status}: ${e}`); }
+    if (!response.ok) { const e = await response.text(); throw new Error(`OpenRouter ${response.status}: ${e}`); }
     const data = await response.json();
     return data.choices[0].message.content;
 }
@@ -540,11 +541,12 @@ Responde SOLO en este formato JSON (sin texto adicional):
 }`;
 
     try {
-        const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const r = await fetch(AI_API_URL, {
             method:'POST',
             headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
             body: JSON.stringify({
-                model:'llama-3.3-70b-versatile',
+                model: AI_MODELS[0],
+                models: AI_MODELS,
                 messages:[{role:'user', content:prompt}],
                 temperature:0.2,
                 max_tokens:600

@@ -1,5 +1,15 @@
 // ===== GAME CONSTANTS =====
 
+// ===== AI PROVIDER (OpenRouter) =====
+const AI_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// Modelos gratuitos con fallback automático: si el primero está saturado
+// o alcanza su límite, OpenRouter prueba el siguiente de la lista.
+const AI_MODELS = [
+    'deepseek/deepseek-v4-flash:free',
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'google/gemma-4-31b-it:free'
+];
+
 const ADVENTURES = [
     { id:'tavern-mystery', title:'El Misterio de la Taberna', emoji:'🕵️', gradient:'linear-gradient(135deg,#1a0a0a,#3d1a0a)', tags:['Misterio','Intriga'], description:'Clientes desaparecen en la Taberna de Rurik. Alguien entre los habituales oculta un secreto mortal.', startScene:'La taberna de Rurik está inusualmente silenciosa esta noche. Tres mesas vacías que siempre tienen clientes, la cocinera evita tu mirada, y el tabernero Grimbold limpia el mismo vaso desde hace veinte minutos. En el rincón del fondo, una silla volcada que nadie ha levantado desde ayer.', location:'Taberna de Rurik' },
     { id:'dungeon-king', title:'Las Catacumbas del Rey Olvidado', emoji:'💀', gradient:'linear-gradient(135deg,#0a0a1a,#1a0a3d)', tags:['Dungeon','Exploración'], description:'Bajo el castillo en ruinas yacen tesoros y horrores. Las trampas del rey muerto llevan mil años esperando.', startScene:'La entrada a las catacumbas es una grieta en la roca, apenas lo bastante ancha para entrar de lado. El aire que sale huele a piedra húmeda y algo antiguo. Tu antorcha proyecta sombras que parecen moverse antes de que la llama las alcance. La leyenda dice que el último explorador que entró dejó sus botas en la entrada. Las botas siguen aquí.', location:'Catacumbas del Rey Olvidado' },

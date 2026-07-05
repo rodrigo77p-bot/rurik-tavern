@@ -219,7 +219,7 @@ async function init() {
         // No need to set fbUser; we'll just skip sync.
     }
 
-    state.apiKey = localStorage.getItem('groqApiKey');
+    state.apiKey = localStorage.getItem('openrouterApiKey');
     if (!state.apiKey) { showScreen('apiKey'); return; }
     migrateOldData();
     showScreen('characterHub');
@@ -313,8 +313,8 @@ function showScreen(name) {
 function renderApiKeyScreen() {
     return `<div class="container">
         <h1>Rurik Tavern</h1>
-        <p style="text-align:center;margin-bottom:1.5rem;color:var(--text-muted)">Ingresa tu API key de Groq para comenzar.</p>
-        <div class="input-group"><label>API Key de Groq</label><input type="password" id="apiKeyInput" placeholder="gsk_..."></div>
+        <p style="text-align:center;margin-bottom:1.5rem;color:var(--text-muted)">Ingresa tu API key de OpenRouter para comenzar.</p>
+        <div class="input-group"><label>API Key de OpenRouter</label><input type="password" id="apiKeyInput" placeholder="sk-or-..."></div>
         <button class="btn" id="saveApiKeyBtn">Comenzar</button>
     </div>`;
 }
@@ -658,7 +658,7 @@ function bindAuthScreen() {
             document.body.appendChild(loadingEl);
             await syncFromFirestore();
             loadingEl.remove();
-            state.apiKey = localStorage.getItem('groqApiKey');
+            state.apiKey = localStorage.getItem('openrouterApiKey');
             if (!state.apiKey) { showScreen('apiKey'); return; }
             migrateOldData();
             showScreen('characterHub');
@@ -676,7 +676,7 @@ function bindAuthScreen() {
         try {
             const cred = await fbAuth.createUserWithEmailAndPassword(email, pass);
             fbUser = cred.user;
-            state.apiKey = localStorage.getItem('groqApiKey');
+            state.apiKey = localStorage.getItem('openrouterApiKey');
             if (!state.apiKey) { showScreen('apiKey'); return; }
             showScreen('characterHub');
         } catch(e) {
@@ -740,7 +740,7 @@ function generateDefaultActions() {
 function bindApiKeyScreen() {
     document.getElementById('saveApiKeyBtn').addEventListener('click', () => {
         const key = document.getElementById('apiKeyInput').value.trim();
-        if (key) { state.apiKey = key; localStorage.setItem('groqApiKey', key); showScreen('characterHub'); }
+        if (key) { state.apiKey = key; localStorage.setItem('openrouterApiKey', key); showScreen('characterHub'); }
     });
 }
 
