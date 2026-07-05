@@ -159,7 +159,7 @@ async function callAndRespond(action, rollResult) {
             errorMessage = 'La respuesta recibida no tenía el formato esperado. Esto puede ser temporal; inténtalo de nuevo.';
             isUserActionable = true;
         } else if (err.name === 'TypeError') {
-            errorMessage = 'Ocurrió un error inesperado en el procesamiento. Por favor, inténtalo de nuevo.';
+            errorMessage = `Ocurrió un error inesperado en el procesamiento (${err.message}). Por favor, inténtalo de nuevo.`;
             isUserActionable = true;
         } else if (err.message && err.message.includes('OpenRouter')) {
             // Handle OpenRouter API specific errors
@@ -430,7 +430,13 @@ async function callAiApi(playerAction, rollResult) {
     });
     if (!response.ok) { const e = await response.text(); throw new Error(`OpenRouter ${response.status}: ${e}`); }
     const data = await response.json();
-    return data.choices[0].message.content;
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) {
+        // OpenRouter puede devolver 200 con un objeto de error o contenido vacío
+        const detail = data?.error?.message || JSON.stringify(data).slice(0, 300);
+        throw new Error(`OpenRouter respuesta inválida: ${detail}`);
+    }
+    return content;
 }
 
 
@@ -562,7 +568,8 @@ Responde SOLO en este formato JSON (sin texto adicional):
             })
         });
         const d = await r.json();
-        const raw = d.choices[0].message.content.trim();
+        const raw = (d?.choices?.[0]?.message?.content || '').trim();
+        if (!raw) throw new Error('OpenRouter respuesta vacía en consolidación de memoria');
 
         // Try to parse structured memory
         let parsed = null;
