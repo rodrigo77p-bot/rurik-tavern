@@ -378,6 +378,8 @@ function getRecentHistory() {
     let exchangesCollected = 0;
 
     while (i >= 0 && exchangesCollected < 3) {
+        // Defensa: nunca leer fuera del array
+        if (!chatHistory[i]) { i -= 1; continue; }
         // Look for a player message followed by a DM message (or vice versa)
         if (chatHistory[i].role === 'player') {
             // Found player message, look for preceding DM message if available
@@ -396,20 +398,11 @@ function getRecentHistory() {
             }
             exchangesCollected++;
         } else if (chatHistory[i].role === 'dm') {
-            // Found DM message, look for following player message if available
-            const dmMsg = chatHistory[i];
-            let playerMsg = null;
-
-            // Check if there's a player message after this DM message
-            if (i < chatHistory.length - 1 && chatHistory[i+1].role === 'player') {
-                playerMsg = chatHistory[i+1];
-                recentExchanges.unshift({ dm: dmMsg, player: playerMsg });
-                i += 2; // Skip both messages
-            } else {
-                // No following player message, just add the DM message
-                recentExchanges.unshift({ dm: dmMsg });
-                i += 1;
-            }
+            // Mensaje del DM sin jugador posterior sin procesar: añadirlo solo.
+            // FIX: antes avanzaba el índice hacia adelante (i += 1/2), se salía
+            // del array y rompía con "Cannot read properties of undefined ('role')".
+            recentExchanges.unshift({ dm: chatHistory[i] });
+            i -= 1; // seguir siempre hacia atrás
             exchangesCollected++;
         } else {
             i -= 1;
