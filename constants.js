@@ -5,9 +5,9 @@ const AI_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 // Modelos gratuitos con fallback automático: si el primero está saturado
 // o alcanza su límite, OpenRouter prueba el siguiente de la lista.
 const AI_MODELS = [
-    'deepseek/deepseek-v4-flash:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-    'google/gemma-4-31b-it:free'
+    'google/gemma-4-31b-it:free',          // principal: no-razonador, formato fiable, buen español
+    'deepseek/deepseek-v4-flash:free',     // respaldo: mejor narrativa
+    'nvidia/nemotron-3-super-120b-a12b:free' // respaldo 2
 ];
 
 const ADVENTURES = [
