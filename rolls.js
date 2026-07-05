@@ -28,9 +28,11 @@ function createItemFromName(itemName) {
 
     if (lowerName.includes('espada') || lowerName.includes('daga') || lowerName.includes('arco') ||
         lowerName.includes('hacha') || lowerName.includes('maz') || lowerName.includes('lanza') ||
-        lowerName.includes('bastón') || lowerName.includes('club') || lowerName.includes('martillo')) {
+        lowerName.includes('bastón') || lowerName.includes('club') || lowerName.includes('martillo') ||
+        lowerName.includes('cuchillo') || lowerName.includes('ballesta') || lowerName.includes('estoque') ||
+        lowerName.includes('cimitarra') || lowerName.includes('mandoble') || lowerName.includes('garrote')) {
         type = 'arma';
-        damage = 6;
+        damage = getWeaponDamage(name).die; // die by weapon type (d4-d12)
     } else if (lowerName.includes('armadura') || lowerName.includes('escudo') || lowerName.includes('ropa') ||
                lowerName.includes('vestiduras') || lowerName.includes('túnica') || lowerName.includes('capa') ||
                lowerName.includes('yelmo') || lowerName.includes('guantes') || lowerName.includes('botas')) {
@@ -489,11 +491,43 @@ function validateStateUpdates(stateUpdates) {
     }
 }
 
-function rollD20(statValue, dc) {
-    const roll = Math.floor(Math.random()*20)+1;
+function rollD20(statValue, dc, opts) {
+    opts = opts || {};
+    const r1 = Math.floor(Math.random()*20)+1;
+    let roll = r1;
+    const rolls = [r1];
+    if (opts.adv === 'ventaja' || opts.adv === 'desventaja') {
+        const r2 = Math.floor(Math.random()*20)+1;
+        rolls.push(r2);
+        roll = opts.adv === 'ventaja' ? Math.max(r1, r2) : Math.min(r1, r2);
+    }
     const mod = Math.floor((statValue-10)/2);
-    const total = roll+mod;
-    return { roll, mod, total, dc, success: total>=dc };
+    const prof = opts.prof || 0;
+    const total = roll + mod + prof;
+    const crit = roll === 20;
+    const fumble = roll === 1;
+    // Nat 20 always succeeds, nat 1 always fails
+    const success = crit ? true : fumble ? false : total >= dc;
+    return { roll, rolls, adv: opts.adv || null, mod, prof, total, dc, success, crit, fumble };
+}
+
+// Net advantage/disadvantage from active conditions
+function getConditionAdvantage() {
+    const conds = state.gameState.conditions || [];
+    let adv = false, dis = false;
+    for (const c of conds) {
+        const def = CONDITIONS[c.id];
+        if (!def) continue;
+        if (def.effect === 'adv') adv = true;
+        if (def.effect === 'dis') dis = true;
+    }
+    return (adv && dis) ? null : adv ? 'ventaja' : dis ? 'desventaja' : null;
+}
+// Combine AI-requested adv with condition-derived adv (they cancel out)
+function combineAdvantage(a, b) {
+    const set = new Set([a, b].filter(Boolean));
+    if (set.has('ventaja') && set.has('desventaja')) return null;
+    return set.has('ventaja') ? 'ventaja' : set.has('desventaja') ? 'desventaja' : null;
 }
 
 // Skills that trigger an opposed NPC roll
@@ -547,17 +581,29 @@ window.executeRoll = async function(dmMsgIdx) {
     if (!state.pendingRoll) return;
     const { trigger, statValue } = state.pendingRoll;
     state.pendingRoll = null;
-    const statVal = statValue || 10;
-    const result = { ...rollD20(statVal, trigger.dc), skill: trigger.skill };
+    const statVal = statValue || (state.character?.stats?.[trigger.stat] ?? 10);
+
+    // Advantage: AI request + active conditions (cancel each other out)
+    const adv = combineAdvantage(trigger.adv || null, getConditionAdvantage());
+    // Proficiency bonus from class/learned knowledges
+    const prof = getProficiencyBonus(trigger.skill);
+
+    const result = { ...rollD20(statVal, trigger.dc, { adv, prof }), skill: trigger.skill };
 
     // Track skill usage
     const category = guessSkillCategory(trigger.skill);
-    state.gameState.skillUses[category]++;
+    if (!state.gameState.skillUses) state.gameState.skillUses = { combat:0, magic:0, stealth:0, social:0, nature:0 };
+    state.gameState.skillUses[category] = (state.gameState.skillUses[category] || 0) + 1;
     updateClassEvolution();
 
     // Build base roll message
     const mod = result.mod >= 0 ? '+'+result.mod : result.mod;
-    let rollMsg = `[Tirada de ${trigger.skill}: d20=${result.roll} ${mod} = ${result.total} vs DC ${trigger.dc} → ${result.success ? '¡ÉXITO!' : 'FALLO'}]`;
+    const profStr = result.prof ? ` +${result.prof}(competencia)` : '';
+    const advStr = result.adv ? ` [${result.adv.toUpperCase()}: dados ${result.rolls.join('/')}]` : '';
+    const critStr = result.crit ? ' ¡CRÍTICO NATURAL 20!' : result.fumble ? ' ¡PIFIA NATURAL 1!' : '';
+    let rollMsg = `[Tirada de ${trigger.skill}: d20=${result.roll}${advStr} ${mod}${profStr} = ${result.total} vs DC ${trigger.dc} → ${result.success ? '¡ÉXITO!' : 'FALLO'}${critStr}]`;
+    if (result.crit) rollMsg += `\n[NARRADOR: éxito crítico — el resultado debe ser excepcionalmente bueno, más de lo que el jugador esperaba.]`;
+    if (result.fumble) rollMsg += `\n[NARRADOR: pifia — el fallo tiene una consecuencia negativa adicional, cómica o peligrosa.]`;
 
     // Opposed NPC roll for social skills
     const opposedDef = OPPOSED_ROLL_SKILLS[trigger.skill];
@@ -634,37 +680,323 @@ function updateClassEvolution() {
 }
 
 // Experience and leveling system
+// NOTE: xpForNextLevel was previously a `const` reassigned inside the loop → TypeError
+// that silently aborted the DM response on every level-up. Fixed with `let`.
 function addExperience(amount) {
     if (!state.character) return;
 
     state.character.experience += amount;
 
-    // XP needed for next level: level * 100 (so level 2 needs 200 XP total, level 3 needs 300, etc.)
-    // This means to go from level N to N+1, you need (N+1) * 100 XP
-    const xpForNextLevel = (state.character.level + 1) * 100;
+    let xpForNextLevel = (state.character.level + 1) * 100;
 
-    // Check if we've leveled up
     while (state.character.experience >= xpForNextLevel) {
         state.character.experience -= xpForNextLevel;
         state.character.level++;
-        state.character.skillPoints += 2; // Grant 2 skill points per level up
-
-        // Check for class evolution after leveling up (since stats might have increased via skill points)
+        state.character.skillPoints += 2;
+        applyLevelUp(state.character.level);
         updateClassEvolution();
-
-        // Update xpForNextLevel for the new level
         xpForNextLevel = (state.character.level + 1) * 100;
-
-        // Notify player of level up
-        addDMMessage(`¡Has alcanzado el nivel ${state.character.level}! Has ganado 2 puntos de habilidad para asignar a tus estadísticas.`);
-
-        // Update UI
-        updateStatus();
-        updatePartyPanel();
     }
 
-    // Save game state
+    updateCharData(state.character);
+    updateStatus();
+    updatePartyPanel();
     saveGameStateFor(state.activeCharId, state.gameState);
+}
+
+// Real level progression: max HP by class hit die + new class ability at odd levels
+function applyLevelUp(newLevel) {
+    const die = CLASS_HIT_DIE[state.character.classe] || 8;
+    const conMod = Math.floor((state.character.stats.CON - 10) / 2);
+    const hpGain = Math.max(1, Math.ceil(die / 2) + conMod); // average of hit die + CON mod
+    state.gameState.maxHp += hpGain;
+    state.gameState.hp = Math.min(state.gameState.maxHp, state.gameState.hp + hpGain);
+
+    let msg = `⬆️ ¡Has alcanzado el nivel ${newLevel}! +${hpGain} HP máximo (ahora ${state.gameState.maxHp}). +2 puntos de habilidad (usa /asignar <stat> <puntos>).`;
+
+    // New class ability at levels 3, 5, 7, 9...
+    if (newLevel >= 3 && newLevel % 2 === 1) {
+        const pool = CLASS_LEVEL_ABILITIES[state.character.classe] || [];
+        if (!Array.isArray(state.gameState.learnedAbilities)) state.gameState.learnedAbilities = [];
+        const next = pool.find(a => !state.gameState.learnedAbilities.find(l => l.id === a.id));
+        if (next) {
+            state.gameState.learnedAbilities.push({ ...next, source: `Nivel ${newLevel}` });
+            msg += `\n⚡ Nueva habilidad de clase: ${next.name} — ${next.description}`;
+        }
+    }
+    addDMMessage(msg);
+}
+
+// ===================== STRUCTURED COMBAT SYSTEM =====================
+// Lightweight: the app owns all numbers (enemy HP, damage, defense), the AI only narrates.
+
+function getPlayerDefense() {
+    const dexMod = Math.floor(((state.character?.stats?.DES ?? 10) - 10) / 2);
+    const eq = state.gameState.equipped || {};
+    const ropa = (eq.ropa || '').toLowerCase();
+    let armor = 0;
+    if (/placas|malla completa/.test(ropa)) armor = 4;
+    else if (/malla|escamas/.test(ropa)) armor = 3;
+    else if (/cuero endurecido|cuero tachonado/.test(ropa)) armor = 2;
+    else if (/cuero|armadura/.test(ropa)) armor = 1;
+    const shield = /escudo/.test((eq.offhand || '').toLowerCase()) ? 2 : 0;
+    return 10 + dexMod + armor + shield;
+}
+
+function startCombat(data) {
+    const enemies = (data.enemies || []).slice(0, 4).map((e, i) => {
+        const base = (e.ref && BESTIARY[e.ref]) ? BESTIARY[e.ref] : {};
+        const hp = e.hp ?? base.hp ?? 10;
+        return {
+            id: ((e.id || e.ref || 'enemigo') + '_' + i),
+            name: e.name || base.name || 'Enemigo',
+            hp, maxHp: hp,
+            attackBonus: e.attackBonus ?? base.attackBonus ?? 2,
+            damage: e.damage || base.damage || 'd6',
+            xp: e.xp ?? base.xp ?? 25,
+            condition: e.condition || base.condition || null
+        };
+    });
+    if (!enemies.length) return;
+    state.gameState.combat = { active: true, round: 1, enemies };
+    renderCombatPanel();
+}
+
+function endCombat(outcome) {
+    if (!state.gameState.combat) return;
+    state.gameState.combat = null;
+    renderCombatPanel();
+    saveGameStateFor(state.activeCharId, state.gameState);
+}
+
+// Which enemy is the player attacking? Match name words in their last message, else first alive.
+function findTargetEnemy() {
+    const combat = state.gameState.combat;
+    if (!combat?.active) return null;
+    const alive = combat.enemies.filter(e => e.hp > 0);
+    if (!alive.length) return null;
+    const lastPlayer = state.chatHistory.findLast(m => m.role === 'player');
+    if (lastPlayer?.content) {
+        const text = lastPlayer.content.toLowerCase();
+        for (const e of alive) {
+            const words = e.name.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+            if (words.some(w => text.includes(w))) return e;
+        }
+    }
+    return alive[0];
+}
+
+function isAttackRoll(rollResult) {
+    if (!rollResult) return false;
+    const skill = rollResult.skill || '';
+    return ['Ataque', 'Combate', 'Fuerza', 'Magia'].includes(skill) || guessSkillCategory(skill) === 'combat';
+}
+
+// Runs after each player action while combat is active.
+// Returns a context string describing damage dealt + enemy turn, for the AI to narrate.
+function processCombatTurn(rollResult) {
+    const combat = state.gameState.combat;
+    if (!combat?.active) return '';
+    let msg = '';
+
+    // 1. Player damage on successful attack roll
+    if (rollResult && rollResult.success && isAttackRoll(rollResult)) {
+        const target = findTargetEnemy();
+        if (target) {
+            const weapon = (state.gameState.equipped?.arma) || 'puños';
+            const dmg = rollWeaponDamage(weapon, rollResult.crit);
+            target.hp = Math.max(0, target.hp - dmg.total);
+            msg += `\n[DAÑO INFLIGIDO: ${dmg.total} (d${dmg.die}${dmg.crit ? ' x2 CRÍTICO' : ''}${dmg.bonus ? '+' + dmg.bonus : ''}) con ${weapon} a ${target.name} → HP ${target.hp}/${target.maxHp}]`;
+            if (target.hp <= 0) {
+                msg += `\n[ENEMIGO DERROTADO: ${target.name}. Narra su caída.]`;
+                addExperience(target.xp || 25);
+            }
+        }
+    }
+
+    // 2. Victory check
+    const alive = combat.enemies.filter(e => e.hp > 0);
+    if (!alive.length) {
+        const totalXp = combat.enemies.reduce((a, e) => a + (e.xp || 25), 0);
+        endCombat('victoria');
+        msg += `\n[COMBATE TERMINADO: VICTORIA. Todos los enemigos han caído. Narra el final del combate y el botín razonable si procede (+${totalXp} XP ya otorgados).]`;
+        return msg;
+    }
+
+    // 3. Enemy turn: each living enemy attacks the player
+    const defense = getPlayerDefense();
+    for (const e of alive) {
+        const atkRoll = Math.floor(Math.random() * 20) + 1;
+        const atkTotal = atkRoll + (e.attackBonus || 0);
+        const critHit = atkRoll === 20;
+        if (atkRoll !== 1 && (critHit || atkTotal >= defense)) {
+            let dmg = rollDieExpr(e.damage);
+            if (critHit) dmg += rollDieExpr(e.damage);
+            state.gameState.hp = Math.max(0, state.gameState.hp - dmg);
+            msg += `\n[TURNO ENEMIGO: ${e.name} ataca d20=${atkRoll}+${e.attackBonus}=${atkTotal} vs Defensa ${defense} → IMPACTA${critHit ? ' (CRÍTICO)' : ''}, ${dmg} de daño. HP del jugador: ${state.gameState.hp}/${state.gameState.maxHp}]`;
+            // Some monsters inflict a condition on hit (25% chance)
+            if (e.condition && CONDITIONS[e.condition] && Math.random() < 0.25) {
+                processConditionUpdate({ add: [{ id: e.condition, turns: 3 }] });
+                msg += `\n[CONDICIÓN APLICADA: el golpe de ${e.name} te deja ${CONDITIONS[e.condition].name.toLowerCase()}]`;
+            }
+            if (state.gameState.hp <= 0) break; // player is down, stop the round
+        } else {
+            msg += `\n[TURNO ENEMIGO: ${e.name} ataca d20=${atkRoll}+${e.attackBonus}=${atkTotal} vs Defensa ${defense} → FALLA]`;
+        }
+    }
+    combat.round++;
+    renderCombatPanel();
+    return msg;
+}
+
+// ===================== CONDITIONS =====================
+function processConditionUpdate(c) {
+    if (!c) return;
+    if (!Array.isArray(state.gameState.conditions)) state.gameState.conditions = [];
+    for (const add of (c.add || [])) {
+        const id = (typeof add === 'string' ? add : (add.id || '')).toLowerCase().trim();
+        if (!CONDITIONS[id]) continue;
+        const turns = (typeof add === 'object' && add.turns) ? Math.min(10, Math.max(1, parseInt(add.turns) || 3)) : 3;
+        const existing = state.gameState.conditions.find(x => x.id === id);
+        if (existing) existing.turns = Math.max(existing.turns, turns);
+        else state.gameState.conditions.push({ id, turns });
+    }
+    for (const rem of (c.remove || [])) {
+        const id = (typeof rem === 'string' ? rem : (rem.id || '')).toLowerCase().trim();
+        state.gameState.conditions = state.gameState.conditions.filter(x => x.id !== id);
+    }
+    updateStatus();
+}
+
+// Called once per player turn: applies damage-over-time and decrements durations.
+// Returns a context string for the AI.
+function tickConditions() {
+    const conds = state.gameState.conditions || [];
+    if (!conds.length) return '';
+    const msgs = [];
+    for (const c of conds) {
+        const def = CONDITIONS[c.id];
+        if (!def) continue;
+        if (def.dot) {
+            const dmg = Math.floor(Math.random() * def.dot) + 1;
+            state.gameState.hp = Math.max(0, state.gameState.hp - dmg);
+            msgs.push(`${def.name}: ${dmg} de daño`);
+        }
+        c.turns--;
+    }
+    const expired = conds.filter(c => c.turns <= 0);
+    state.gameState.conditions = conds.filter(c => c.turns > 0);
+    for (const e of expired) msgs.push(`${CONDITIONS[e.id]?.name || e.id} ha terminado`);
+    return msgs.length ? `\n[CONDICIONES ESTE TURNO: ${msgs.join('; ')}. HP: ${state.gameState.hp}/${state.gameState.maxHp}]` : '';
+}
+
+// ===================== GOLD =====================
+function applyGoldUpdate(g) {
+    if (!g) return;
+    const delta = Math.round(Number(g.delta));
+    if (isNaN(delta) || delta === 0) return;
+    state.gameState.gold = Math.max(0, (state.gameState.gold || 0) + delta);
+    updateStatus();
+}
+
+// ===================== QUEST JOURNAL =====================
+function processQuestUpdate(q) {
+    if (!q || (!q.title && !q.id)) return;
+    if (!Array.isArray(state.gameState.quests)) state.gameState.quests = [];
+    const id = (q.id || q.title).toLowerCase().replace(/\s+/g, '_').slice(0, 40);
+    const status = ['activa', 'completada', 'fallida'].includes(q.status) ? q.status : 'activa';
+    const existing = state.gameState.quests.find(x => x.id === id);
+    if (existing) {
+        existing.status = status;
+        if (q.title) existing.title = q.title;
+        if (q.note && typeof q.note === 'string') {
+            if (!Array.isArray(existing.notes)) existing.notes = [];
+            if (!existing.notes.includes(q.note)) existing.notes.push(q.note);
+        }
+    } else {
+        state.gameState.quests.push({ id, title: q.title || id, status, notes: (q.note && typeof q.note === 'string') ? [q.note] : [], created: new Date().toISOString().slice(0, 10) });
+    }
+}
+
+// ===================== DEATH SAVES =====================
+// At 0 HP the character is dying, not dead: d20 per save.
+// >=10 success, <10 fail, nat 20 revives with 1 HP, nat 1 counts as 2 fails.
+// 3 successes → stabilized (1 HP, unconscious). 3 fails → permanent death.
+function startDying(deathNarration) {
+    state.gameState.hp = 0;
+    state.dying = { successes: 0, failures: 0, deathNarration: deathNarration || null };
+    const input = document.getElementById('playerInput');
+    const btn = document.getElementById('sendBtn');
+    if (input) input.disabled = true;
+    if (btn) btn.disabled = true;
+    renderDeathSaveWidget();
+    updateStatus();
+}
+
+window.rollDeathSave = async function() {
+    const d = state.dying;
+    if (!d) return;
+    const r = Math.floor(Math.random() * 20) + 1;
+    let note, resolved = null;
+    if (r === 20)      { note = `d20=20 — ¡MILAGRO! Recuperas la consciencia con 1 HP.`; resolved = 'revive'; }
+    else if (r === 1)  { d.failures += 2; note = `d20=1 — pifia: DOS fallos.`; }
+    else if (r >= 10)  { d.successes++;   note = `d20=${r} — éxito.`; }
+    else               { d.failures++;    note = `d20=${r} — fallo.`; }
+
+    if (!resolved && d.failures >= 3) resolved = 'death';
+    if (!resolved && d.successes >= 3) resolved = 'stable';
+
+    d.lastNote = note;
+    renderDeathSaveWidget();
+
+    if (!resolved) return;
+
+    const input = document.getElementById('playerInput');
+    const btn = document.getElementById('sendBtn');
+    if (resolved === 'death') {
+        const narr = d.deathNarration;
+        state.dying = null;
+        removeDeathSaveWidget();
+        saveGameStateFor(state.activeCharId, state.gameState);
+        triggerDeath(narr || `${state.character.name} sucumbió a sus heridas en ${state.gameState.location}.`);
+        return;
+    }
+    // revive or stable
+    state.dying = null;
+    state.gameState.hp = 1;
+    removeDeathSaveWidget();
+    if (input) input.disabled = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Enviar'; }
+    updateStatus(); updatePartyPanel();
+    saveGameStateFor(state.activeCharId, state.gameState);
+    const ctx = resolved === 'revive'
+        ? `[SALVACIÓN DE MUERTE RESUELTA: 20 natural — ${state.character.name} despierta de golpe con 1 HP. Narra cómo vuelve en sí desafiando a la muerte. El combate ha terminado o los enemigos ya no son una amenaza inmediata; da al jugador un respiro.]`
+        : `[SALVACIÓN DE MUERTE RESUELTA: ${state.character.name} se estabiliza con 1 HP tras 3 éxitos. Estuvo al borde de la muerte. Narra cómo recupera la consciencia débil y malherido; los enemigos se han ido o la situación ha cambiado. Da al jugador un respiro.]`;
+    if (state.gameState.combat?.active) endCombat('interrumpido');
+    await callAndRespond(ctx, null);
+};
+
+function renderDeathSaveWidget() {
+    removeDeathSaveWidget();
+    const container = document.getElementById('chatContainer');
+    if (!container || !state.dying) return;
+    const d = state.dying;
+    const hearts = '💚'.repeat(d.successes) + '🖤'.repeat(Math.max(0, 3 - d.successes));
+    const skulls = '💀'.repeat(Math.min(3, d.failures)) + '⬜'.repeat(Math.max(0, 3 - d.failures));
+    const el = document.createElement('div');
+    el.id = 'deathSaveWidget';
+    el.className = 'death-save-widget';
+    el.innerHTML = `
+        <div class="dsw-title">⚰️ Estás agonizando</div>
+        <div class="dsw-desc">A 0 HP tu vida pende de un hilo. Necesitas 3 éxitos (d20 ≥ 10) antes de acumular 3 fallos.</div>
+        <div class="dsw-counters"><span>Éxitos: ${hearts}</span><span>Fallos: ${skulls}</span></div>
+        ${d.lastNote ? `<div class="dsw-note">${d.lastNote}</div>` : ''}
+        <button class="roll-btn dsw-btn" onclick="rollDeathSave()">☠️ Tirada de salvación</button>`;
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+}
+function removeDeathSaveWidget() {
+    document.getElementById('deathSaveWidget')?.remove();
 }
 
 window.useAction = function(text) {

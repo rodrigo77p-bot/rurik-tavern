@@ -307,6 +307,40 @@ function renderChat() {
     container.scrollTop = container.scrollHeight;
 }
 
+// Shared roll badge builder (supports adv/dis dice, proficiency, crits)
+function rollBadgeHtml(r) {
+    if (!r) return '';
+    const modDisplay = r.mod >= 0 ? `+${r.mod}` : `${r.mod}`;
+    const profDisplay = r.prof ? `+${r.prof}🎓` : '';
+    const diceDisplay = (r.rolls && r.rolls.length > 1)
+        ? `${r.adv === 'ventaja' ? '⬆' : '⬇'}(${r.rolls.join('·')})→${r.roll}`
+        : `${r.roll}`;
+    const critClass = r.crit ? ' crit' : r.fumble ? ' fumble' : '';
+    const outcome = r.crit ? '¡CRÍTICO!' : r.fumble ? '¡Pifia!' : r.success ? 'Éxito' : 'Fallo';
+    return `<div class="roll-badge ${r.success ? 'success' : 'failure'}${critClass}">${r.skill} d20=${diceDisplay}${modDisplay}${profDisplay}=${r.total} ${outcome}</div>`;
+}
+
+// Pending-roll widget (works for both player-initiated and AI-requested rolls).
+// statValue fallback: AI-requested rolls don't set it, so look it up from character stats.
+function rollPendingHtml(idx) {
+    const t = state.pendingRoll?.trigger;
+    if (!t) return '';
+    const statVal = state.pendingRoll?.statValue || state.character?.stats?.[t.stat] || 10;
+    const mod = Math.floor((statVal - 10) / 2);
+    const prof = typeof getProficiencyBonus === 'function' ? getProficiencyBonus(t.skill) : 0;
+    const adv = combineAdvantage(t.adv || null, getConditionAdvantage());
+    const advHtml = adv ? `<span class="roll-adv ${adv}">${adv === 'ventaja' ? '⬆ Ventaja' : '⬇ Desventaja'}</span>` : '';
+    const profHtml = prof ? `<span class="roll-mod" title="Bono de competencia">+${prof}🎓</span>` : '';
+    return `<div class="roll-pending"><span class="roll-skill">${t.skill}</span><span class="roll-mod">${mod>=0?'+':''}${mod}</span>${profHtml}${advHtml}<span class="roll-dc">DC ${t.dc}</span><button class="roll-btn" onclick="executeRoll(${idx})">→ Tirar</button></div>`;
+}
+function npcRollBadgeHtml(npcRoll) {
+    if (!npcRoll) return '';
+    const npcModDisplay = npcRoll.mod >= 0 ? `+${npcRoll.mod}` : `${npcRoll.mod}`;
+    const npcClass = npcRoll.playerWins ? 'npc-roll-lost' : 'npc-roll-won';
+    const outcome = npcRoll.playerWins ? '🗡️ Engaño logrado' : '👁️ NPC sospecha';
+    return `<div class="roll-badge npc-opposed ${npcClass}">NPC ${npcRoll.skill} d20=${npcRoll.roll}${npcModDisplay}=${npcRoll.total} · ${outcome}</div>`;
+}
+
 function createMessageEl(msg, idx) {
     const wrap = document.createElement('div');
     wrap.setAttribute('data-idx', idx);
@@ -314,8 +348,14 @@ function createMessageEl(msg, idx) {
         wrap.className = 'message dm';
         let rollHtml = '';
         if (msg.rollResult) {
-            const modDisplay = msg.rollResult.mod >= 0 ? `+${msg.rollResult.mod}` : `${msg.rollResult.mod}`;
-            rollHtml = `<div class="roll-badge ${msg.rollResult.success?'success':'failure'}">${msg.rollResult.skill} d20=${msg.rollResult.roll}${modDisplay}=${msg.rollResult.total} ${msg.rollResult.success?'Éxito':'Fallo'}</div>`;
+            rollHtml = rollBadgeHtml(msg.rollResult);
+        } else if (msg.roll) {
+            // AI-requested roll already resolved on this DM message
+            rollHtml = rollBadgeHtml(msg.roll) + npcRollBadgeHtml(msg.npcRoll);
+        } else if (msg.rollPending && state.pendingRoll?.trigger) {
+            // FIX: AI-requested rolls ([ROLL:] blocks) never rendered their dice widget —
+            // the DM branch ignored rollPending, so the roll could never be executed.
+            rollHtml = rollPendingHtml(idx);
         }
         wrap.innerHTML = `
             <div class="dm-header"><span class="dm-label">Maestro de Mazmorras</span><span class="dm-location">${msg.location||''} · ${msg.time||''}</span></div>
@@ -326,20 +366,9 @@ function createMessageEl(msg, idx) {
         wrap.className = 'message player';
         let rollHtml = '';
         if (msg.rollState==='pending' && !msg.roll && state.pendingRoll?.trigger) {
-            const t = state.pendingRoll.trigger;
-            const statVal = state.pendingRoll?.statValue || 10;
-            const mod = Math.floor(((statVal)-10)/2);
-            rollHtml = `<div class="roll-pending"><span class="roll-skill">${t.skill}</span><span class="roll-mod">${mod>=0?'+':''}${mod}</span><span class="roll-dc">DC ${t.dc}</span><button class="roll-btn" onclick="executeRoll(${idx})">→ Tirar</button></div>`;
+            rollHtml = rollPendingHtml(idx);
         } else if (msg.roll) {
-            const modDisplay = msg.roll.mod >= 0 ? `+${msg.roll.mod}` : `${msg.roll.mod}`;
-            rollHtml = `<div class="roll-badge ${msg.roll.success?'success':'failure'}">${msg.roll.skill} d20=${msg.roll.roll}${modDisplay}=${msg.roll.total} ${msg.roll.success?'Éxito':'Fallo'}</div>`;
-            // Show NPC opposed roll if present
-            if (msg.npcRoll) {
-                const npcModDisplay = msg.npcRoll.mod >= 0 ? `+${msg.npcRoll.mod}` : `${msg.npcRoll.mod}`;
-                const npcClass = msg.npcRoll.playerWins ? 'npc-roll-lost' : 'npc-roll-won';
-                const outcome = msg.npcRoll.playerWins ? '🗡️ Engaño logrado' : '👁️ NPC sospecha';
-                rollHtml += `<div class="roll-badge npc-opposed ${npcClass}">NPC ${msg.npcRoll.skill} d20=${msg.npcRoll.roll}${npcModDisplay}=${msg.npcRoll.total} · ${outcome}</div>`;
-            }
+            rollHtml = rollBadgeHtml(msg.roll) + npcRollBadgeHtml(msg.npcRoll);
         }
         wrap.innerHTML = `<div class="player-action">${msg.content}</div>${rollHtml}`;
     }
@@ -362,6 +391,14 @@ function addPlayerMessage(content, roll, rollState, idx) {
 function updateStatus() {
     const el = id => document.getElementById(id);
     if (el('hpDisplay')) el('hpDisplay').textContent = `${state.gameState.hp}/${state.gameState.maxHp}`;
+    if (el('goldDisplay')) el('goldDisplay').textContent = `${state.gameState.gold ?? 0}`;
+    if (el('conditionsDisplay')) {
+        const conds = state.gameState.conditions || [];
+        el('conditionsDisplay').innerHTML = conds.length
+            ? conds.map(c => { const d = CONDITIONS[c.id]; return d ? `<span class="cond-badge" title="${d.name} (${c.turns} turnos): ${d.desc}">${d.emoji}${c.turns}</span>` : ''; }).join('')
+            : '';
+        el('conditionsDisplay').style.display = conds.length ? '' : 'none';
+    }
     if (el('locationDisplay')) el('locationDisplay').textContent = state.gameState.location;
     if (el('timeDisplay')) el('timeDisplay').textContent = state.gameState.timeOfDay;
     if (el('inventoryDisplay')) {
@@ -389,6 +426,63 @@ function updateStatus() {
         el('levelDisplay').textContent = `Nivel ${state.character.level} (${state.character.experience}/${xpForNextLevel} XP) ${state.character.skillPoints > 0 ? `[${state.character.skillPoints} pts]` : ''}`;
     }
     updateMemoryIndicator();
+}
+
+// ===================== COMBAT PANEL =====================
+function renderCombatPanel() {
+    const panel = document.getElementById('combatPanel');
+    if (!panel) return;
+    const combat = state.gameState.combat;
+    if (!combat?.active) {
+        panel.classList.add('hidden');
+        panel.innerHTML = '';
+        return;
+    }
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+        <div class="combat-header">⚔️ COMBATE — Ronda ${combat.round} · Tu defensa: ${getPlayerDefense()}</div>
+        <div class="combat-enemies">
+            ${combat.enemies.map(e => {
+                const pct = Math.max(0, Math.min(100, (e.hp / e.maxHp) * 100));
+                const color = pct > 60 ? '#4a7c59' : pct > 30 ? '#8a6a20' : '#7c4a4a';
+                return `<div class="combat-enemy ${e.hp <= 0 ? 'dead' : ''}">
+                    <div class="ce-name">${e.hp <= 0 ? '💀 ' : ''}${e.name}</div>
+                    <div class="hp-bar-wrap"><div class="hp-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+                    <div class="ce-hp">${e.hp}/${e.maxHp}</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
+// ===================== QUEST JOURNAL =====================
+function openQuestModal() {
+    const modal = document.getElementById('questModal');
+    const content = document.getElementById('questModalContent');
+    if (!modal || !content) return;
+    const quests = state.gameState.quests || [];
+    const statusDef = {
+        activa:     { emoji:'🟡', label:'Activa',     color:'#c9a84c' },
+        completada: { emoji:'✅', label:'Completada', color:'#4a7c59' },
+        fallida:    { emoji:'❌', label:'Fallida',    color:'#7c4a4a' }
+    };
+    const order = { activa: 0, fallida: 1, completada: 2 };
+    const sorted = quests.slice().sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
+    content.innerHTML = sorted.length === 0
+        ? '<div class="inv-empty">El diario está vacío. Las misiones que aceptes aparecerán aquí.</div>'
+        : sorted.map(q => {
+            const s = statusDef[q.status] || statusDef.activa;
+            return `<div class="npc-card quest-card" style="margin-bottom:0.5rem;border-left:3px solid ${s.color}">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <span>${s.emoji}</span>
+                    <div style="flex:1">
+                        <div style="font-weight:600;color:var(--accent)">${q.title}</div>
+                        <div style="font-size:0.72rem;color:${s.color}">${s.label}${q.created ? ' · ' + q.created : ''}</div>
+                    </div>
+                </div>
+                ${(q.notes || []).length ? `<ul class="npc-list" style="margin-top:0.4rem">${q.notes.slice(-4).map(n => `<li>${n}</li>`).join('')}</ul>` : ''}
+            </div>`;
+        }).join('');
+    modal.classList.remove('hidden');
 }
 
 function openPartyModal() {

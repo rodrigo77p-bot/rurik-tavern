@@ -11,6 +11,30 @@ async function callAndRespond(action, rollResult) {
     if (container) { container.appendChild(typingEl); container.scrollTop = container.scrollHeight; }
 
     try {
+        // ===== Pre-AI mechanics: condition ticks + structured combat resolution =====
+        // (skipped for death-save context messages, which start with [SALVACIÓN)
+        if (!action.startsWith('[SALVACIÓN')) {
+            // FIX: conditions tick ONCE per player turn (flag set in sendMessage), not on every AI call.
+            // The chip-action flow (action → AI asks [ROLL] → roll resolution) made TWO calls per turn,
+            // so poison/bleed damage ticked twice.
+            if (state.needsConditionTick) {
+                state.needsConditionTick = false;
+                const condMsg = tickConditions();
+                if (condMsg) action += condMsg;
+            }
+            // FIX: combat resolves only on roll resolutions (rollResult present). The prompt mandates
+            // [ROLL] for every combat action, so this prevents enemies attacking twice per player action
+            // (once on the action message, again on the roll resolution).
+            if (state.gameState.combat?.active && state.gameState.hp > 0 && rollResult) {
+                action += processCombatTurn(rollResult);
+            }
+            updateStatus(); renderCombatPanel();
+            // Player dropped to 0 HP from conditions or enemy attacks → dying, tell the AI
+            if (state.gameState.hp <= 0 && !state.dying && state.character.status === 'alive') {
+                action += `\n[EL JUGADOR CAE A 0 HP: está inconsciente y agonizando. Narra su caída de forma dramática pero NO lo mates — su destino se decide con tiradas de salvación de muerte. No pidas [ROLL].]`;
+            }
+        }
+
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000));
         let response = await Promise.race([callGroqApi(action, rollResult), timeoutPromise]);
 
@@ -19,15 +43,25 @@ async function callAndRespond(action, rollResult) {
             console.log('IA RAW RESPONSE:', response);
         }
 
-        let { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate } = parseLlmResponse(response);
+        let { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdates, learnUpdates, questUpdates, combatUpdate, goldUpdates, conditionUpdate } = parseLlmResponse(response);
 
         // Debug logging
         if (DEBUG_IA_COMMUNICATION) {
-            console.log('PARSED IA RESPONSE:', { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate });
+            console.log('PARSED IA RESPONSE:', { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdates, learnUpdates, questUpdates, combatUpdate, goldUpdates, conditionUpdate });
         }
 
-        if (npcUpdate) processNpcUpdate(npcUpdate);
-        if (learnUpdate) processLearnUpdate(learnUpdate);
+        // Each update wrapped individually: one malformed block must never abort the narration
+        for (const u of (npcUpdates || [])) { try { processNpcUpdate(u); } catch(e) { console.warn('NPC update failed:', e); } }
+        for (const u of (learnUpdates || [])) { try { processLearnUpdate(u); } catch(e) { console.warn('LEARN update failed:', e); } }
+        for (const u of (questUpdates || [])) { try { processQuestUpdate(u); } catch(e) { console.warn('QUEST update failed:', e); } }
+        for (const u of (goldUpdates || [])) { try { applyGoldUpdate(u); } catch(e) { console.warn('GOLD update failed:', e); } }
+        if (conditionUpdate) { try { processConditionUpdate(conditionUpdate); } catch(e) { console.warn('CONDITION update failed:', e); } }
+        if (combatUpdate) {
+            try {
+                if (combatUpdate.start && !state.gameState.combat?.active) startCombat(combatUpdate);
+                else if (combatUpdate.end && state.gameState.combat?.active) endCombat(combatUpdate.outcome || 'fin');
+            } catch(e) { console.warn('COMBAT update failed:', e); }
+        }
         document.getElementById('typingIndicator')?.remove();
 
         // Ensure companions and relationships are initialized
@@ -42,6 +76,12 @@ async function callAndRespond(action, rollResult) {
         if (stateUpdates) {
             // Validate state updates for debugging
             validateStateUpdates(stateUpdates);
+
+            // The APP owns these numbers — the AI must not overwrite them via [STATE:]
+            delete stateUpdates.gold;                                  // gold only changes via [GOLD:]
+            if (state.gameState.combat?.active) delete stateUpdates.hp; // in combat, HP is app-controlled
+            delete stateUpdates.maxHp;                                  // maxHp only changes by leveling
+            delete stateUpdates.conditions;                             // conditions only via [CONDITION:]
 
             Object.assign(state.gameState, stateUpdates);
             if (!state.gameState.companions) state.gameState.companions = [];
@@ -61,14 +101,19 @@ async function callAndRespond(action, rollResult) {
         } else {
             addDMMessage(narration, actions);
         }
-        updateStatus(); updatePartyPanel();
+        updateStatus(); updatePartyPanel(); renderCombatPanel();
 
-        // Check for death
-        if (state.gameState.hp <= 0) {
+        // 0 HP → dying (death saves), not instant death
+        if (state.gameState.hp <= 0 && state.character.status === 'alive') {
             saveChatHistoryFor(state.activeCharId, state.chatHistory);
             saveGameStateFor(state.activeCharId, state.gameState);
-            triggerDeath(deathNarration || `${state.character.name} cayó en ${state.gameState.location}.`);
+            if (!state.dying) startDying(deathNarration);
             return;
+        }
+        // AI healed the player above 0 while dying → recovered
+        if (state.dying && state.gameState.hp > 0) {
+            state.dying = null;
+            removeDeathSaveWidget();
         }
 
         // Award XP for successful rolls
@@ -142,8 +187,9 @@ async function callAndRespond(action, rollResult) {
 
         addDMMessage(errorMessage, isUserActionable ? ['Intentarlo de nuevo', 'Cambiar acción', 'Ver ayuda'] : []);
     } finally {
-        if (playerInput) { playerInput.disabled = false; }
-        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
+        // FIX: never re-enable input while the player is dying — the death-save widget owns the turn
+        if (playerInput && !state.dying) { playerInput.disabled = false; }
+        if (sendBtn && !state.dying) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
     }
 }
 
@@ -203,7 +249,7 @@ REGLA: usa esta información cuando evalúes la plausibilidad de mentiras social
     const npcs = (state.gameState.npcs||[]);
     const npcSection = npcs.length > 0 ? '\nPERSONAJES CONOCIDOS:\n' + npcs.map(n=>{
         const tier = getNpcRelTier(n.relationship);
-        const facts = n.knownFacts.slice(-3).join('; ');
+        const facts = (n.knownFacts||[]).slice(-3).join('; ');
         const lastEvent = [...(n.goodMemories||[]),...(n.badMemories||[])].slice(-1)[0]||'';
         const capStr = n.maxRelationship !== undefined && n.maxRelationship < 5 ? ` [TECHO:${getNpcRelTier(n.maxRelationship).label}]` : '';
         const biasStr = n.biases && n.biases.length ? ` [Sesgos: ${n.biases.join(', ')}]` : '';
@@ -237,12 +283,15 @@ ${getRecentHistory()}
 
 ESTADO ACTUAL:
 - Ubicación: ${state.gameState.location} | Hora: ${state.gameState.timeOfDay}
-- HP: ${state.gameState.hp}/${state.gameState.maxHp}
-- Inventario: ${state.gameState.inventory.join(', ')||'vacío'}
-- Misión: ${state.gameState.quest}
+- HP: ${state.gameState.hp}/${state.gameState.maxHp} | Nivel: ${char.level||1}
+- Oro: ${state.gameState.gold ?? 0} monedas
+- Inventario: ${state.gameState.inventory.map(i=>typeof i==='string'?i:i.name).join(', ')||'vacío'}
+- Condiciones activas: ${(state.gameState.conditions||[]).map(c=>`${CONDITIONS[c.id]?.name||c.id} (${c.turns} turnos)`).join(', ')||'ninguna'}
+- Misiones: ${(state.gameState.quests||[]).filter(q=>q.status==='activa').map(q=>q.title).join('; ')||state.gameState.quest||'ninguna'}
 - Contexto: ${state.gameState.summary||'inicio'}
 - Compañeros: ${companions}
-- Relaciones: ${rels}${npcSection}
+- Relaciones: ${rels}${npcSection}${state.gameState.combat?.active ? `
+COMBATE EN CURSO (ronda ${state.gameState.combat.round}): ${state.gameState.combat.enemies.map(e=>`${e.name} HP ${e.hp}/${e.maxHp}${e.hp<=0?' [DERROTADO]':''}`).join(' · ')}. Defensa del jugador: ${getPlayerDefense()}.` : ''}
 ${appearanceSection}
 ${worldSection}${rollSection}
 ${classRulesSection}
@@ -283,7 +332,22 @@ En COMBATE: el [ROLL] es OBLIGATORIO siempre. Calcula el daño solo DESPUÉS de 
 
 DC orientativos: trivial=6, fácil=8, normal=10, moderado=12, difícil=15, muy difícil=18, legendario=20
 
+VENTAJA/DESVENTAJA: en [ROLL:] puedes añadir "adv":"ventaja" (posición favorable, ayuda de aliado, enemigo distraído) o "adv":"desventaja" (herido, terreno malo, presión). Úsalo cuando las circunstancias lo justifiquen claramente.
+
 Stats: FUE(Fuerza/Ataque/Atletismo), DES(Sigilo/Hurto/Acrobacias/Armas a distancia), CON(Resistencia/Aguante), INT(Magia/Arcanos/Conocimiento/Descifrar), SAB(Percepción/Medicina/Naturaleza/Intuición), CAR(Persuasión/Engaño/Intimidación/Seducción/Actuación)
+
+SISTEMA DE COMBATE ESTRUCTURADO:
+Cuando empiece una pelea REAL (no una amenaza verbal) añade al final:
+[COMBAT: {"start":true,"enemies":[{"ref":"bandido","name":"Bandido cicatrizado"},{"id":"jefe1","name":"Capitán Vorn","hp":22,"attackBonus":4,"damage":"d8+1","xp":80}]}]
+Refs válidos del bestiario: ${Object.keys(BESTIARY).join(', ')}. Puedes usar "ref" (stats automáticos) o definir stats a medida. Máximo 4 enemigos.
+DURANTE EL COMBATE LA APP CONTROLA TODOS LOS NÚMEROS: HP de enemigos, daño del jugador, ataques enemigos contra la Defensa del jugador. Recibirás bloques [DAÑO INFLIGIDO...], [TURNO ENEMIGO...] y [COMBATE TERMINADO...] — narra EXACTAMENTE esos resultados, nunca inventes daño, HP ni muertes. Sigue pidiendo [ROLL] para cada ataque del jugador.
+Si el combate acaba por huida, rendición o negociación: [COMBAT: {"end":true,"outcome":"huida"}]. La victoria por muerte de enemigos la detecta la app sola.
+
+SISTEMA DE ORO: cuando el jugador gane o gaste dinero añade [GOLD: {"delta":N,"reason":"..."}] (delta negativo = gasto). NUNCA le permitas comprar algo si su oro actual no alcanza. Precios orientativos: comida 1-3, noche de posada 2-5, poción 15-30, arma común 20-60, arma rara 150+, soborno 10-50.
+
+SISTEMA DE CONDICIONES: aplica o quita estados con [CONDITION: {"add":[{"id":"envenenado","turns":3}],"remove":["asustado"]}]. Ids válidos: envenenado, sangrando, aturdido, paralizado, asustado, cegado, exhausto, bendecido, inspirado, oculto. Úsalo cuando la narración lo justifique (veneno, golpe crítico recibido, magia, miedo...). La app aplica los efectos mecánicos.
+
+DIARIO DE MISIONES: cuando el jugador acepte, avance, complete o falle una misión añade [QUEST: {"id":"id_corto","title":"Título breve","status":"activa|completada|fallida","note":"novedad concreta"}].
 
 Al final, en ESTE ORDEN exacto:
 [ACTIONS: ["acción 1", "acción 2", "acción 3"]]
@@ -297,6 +361,8 @@ Cuando interactúas con un PNJ con nombre, actualiza su registro (usa SOLO si ha
 Escala relación: -3=Enemigo Jurado, -2=Enemigo, -1=Rival, 0=Neutro, 1=Conocido, 2=Amigo, 3=Aliado, 4=Interés Romántico, 5=Amor
 maxRelationship: el TECHO PERMANENTE de relación con este jugador específico. Si el PNJ es racista, leal a una facción enemiga, o tiene razones para no confiar nunca del todo, reduce este valor. Ejemplos: guardia corrupto que odia elfos → maxRelationship:1. Mercenario desconfiado → 3. Una vez fijado NO cambia.
 REGLA CRÍTICA: la relación NUNCA puede mejorar solo porque el jugador sea amable. Debe haber acción concreta que justifique el cambio. Un PNJ con biases negativos resiste activamente el carisma del jugador.
+ACTUALIZACIÓN DE PNJs — OBLIGATORIO: cada vez que el jugador interactúe de forma significativa con un PNJ con nombre, EVALÚA si la relación cambia y emite [NPC:] con "relationship" actualizado y "fact"/"goodMemory"/"badMemory" si hay algo nuevo. SUBE la relación por acciones concretas que beneficien al PNJ (ayudarle, salvarle, cumplir una promesa, un regalo valioso, defenderle). BÁJALA por acciones que le perjudiquen (mentiras descubiertas, amenazas, robo, violencia, traición, insultos). Los PNJs RECUERDAN: usa sus memorias y sesgos listados arriba para decidir cómo tratan al jugador.
+Puedes emitir VARIOS bloques [NPC:] en la misma respuesta si el jugador interactuó con varios PNJs.
 Incluye solo los campos que cambian o son nuevos. biases y maxRelationship solo al crear el PNJ. NUNCA incluyas [NPC] si no hay personaje nombrado significativo.`;
 
     // Añadir regla especial para acciones de juego cuando la entrada corresponde a una opción mostrada
@@ -337,6 +403,10 @@ async function callGroqApi(playerAction, rollResult) {
                 .replace(/\[NPC:[\s\S]*?\]/g, '')
                 .replace(/\[LEGACY:[\s\S]*?\]/g, '')
                 .replace(/\[LEARN:[\s\S]*?\]/g, '')
+                .replace(/\[COMBAT:[\s\S]*?\]/g, '')
+                .replace(/\[GOLD:[\s\S]*?\]/g, '')
+                .replace(/\[QUEST:[\s\S]*?\]/g, '')
+                .replace(/\[CONDITION:[\s\S]*?\]/g, '')
                 .trim();
             if (cleanContent) historyMessages.push({ role: 'assistant', content: cleanContent });
         }
@@ -414,24 +484,33 @@ function parseLlmResponse(response) {
     if (rollBlock) {
         try {
             const r = JSON.parse(rollBlock.content);
-            rollRequest = { skill: r.skill || 'Habilidad', stat: r.stat || guessStatFromSkill(r.skill || ''), dc: parseInt(r.dc) || 12, reason: r.reason || '' };
+            rollRequest = { skill: r.skill || 'Habilidad', stat: r.stat || guessStatFromSkill(r.skill || ''), dc: parseInt(r.dc) || 12, reason: r.reason || '', adv: (r.adv === 'ventaja' || r.adv === 'desventaja') ? r.adv : null };
         } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse ROLL block:', rollBlock.content, e); }
         narration = narration.replace(rollBlock.match, '').trim();
     }
     if (stateUpdates?.hp <= 0) { deathNarration = narration.split('\n\n').slice(-1)[0] || narration.slice(-200); }
-    const npcBlock = extractTagBlock(response, 'NPC');
-    let npcUpdate = null;
-    if (npcBlock) {
-        try { npcUpdate = JSON.parse(npcBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse NPC block:', npcBlock.content, e); }
-        narration = narration.replace(npcBlock.match, '').trim();
+
+    // Extract ALL blocks of a tag (the AI may emit several [NPC:]/[LEARN:]/[QUEST:] per response).
+    // Previously only the first was parsed — the rest were lost AND left as raw text in the chat.
+    function extractAll(tag) {
+        const results = [];
+        let block;
+        while ((block = extractTagBlock(narration, tag))) {
+            try { results.push(JSON.parse(block.content)); }
+            catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn(`Failed to parse ${tag} block:`, block.content, e); }
+            narration = narration.replace(block.match, '').trim();
+        }
+        return results;
     }
-    const learnBlock = extractTagBlock(response, 'LEARN');
-    let learnUpdate = null;
-    if (learnBlock) {
-        try { learnUpdate = JSON.parse(learnBlock.content); } catch(e) { if (DEBUG_IA_COMMUNICATION) console.warn('Failed to parse LEARN block:', learnBlock.content, e); }
-        narration = narration.replace(learnBlock.match, '').trim();
-    }
-    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdate, learnUpdate };
+
+    const npcUpdates = extractAll('NPC');
+    const learnUpdates = extractAll('LEARN');
+    const questUpdates = extractAll('QUEST');
+    const combatUpdate = extractAll('COMBAT')[0] || null;
+    const goldUpdates = extractAll('GOLD');
+    const conditionUpdate = extractAll('CONDITION')[0] || null;
+
+    return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdates, learnUpdates, questUpdates, combatUpdate, goldUpdates, conditionUpdate };
 }
 
 async function summarizeContext() {

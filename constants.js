@@ -265,4 +265,206 @@ function getAdventure(id) {
 }
 function saveAdventureFor(id, adv) { localStorage.setItem('dndAdventure_' + id, JSON.stringify(adv)); fsSaveAdventure(id, adv); }
 
+// ===================== RACIAL STAT BONUSES =====================
+const RACE_STAT_BONUSES = {
+    'Humano':     { FUE:1, DES:1, CON:1, INT:1, SAB:1, CAR:1 },
+    'Elfo':       { DES:2, SAB:1 },
+    'Enano':      { CON:2, FUE:1 },
+    'Mediano':    { DES:2, CAR:1 },
+    'Tiefling':   { CAR:2, INT:1 },
+    'Vampiro':    { CAR:2, DES:1 },
+    'Hada':       { CAR:2, INT:1 },
+    'Fauno':      { CON:2, CAR:1 },
+    'Dragonborn': { FUE:2, CAR:1 },
+    'Orco':       { FUE:2, CON:1 },
+    'Semiélfico': { CAR:2, SAB:1 },
+    'Gnomo':      { INT:2, DES:1 }
+};
+function applyRaceBonuses(stats, race) {
+    const bonuses = RACE_STAT_BONUSES[race] || {};
+    const out = { ...stats };
+    for (const [ab, b] of Object.entries(bonuses)) out[ab] = (out[ab] || 10) + b;
+    return out;
+}
+
+// ===================== HIT DICE (level-up HP) =====================
+const CLASS_HIT_DIE = { 'Guerrero':10, 'Paladín':10, 'Explorador':10, 'Monje':8, 'Pícaro':8, 'Bardo':8, 'Clérigo':8, 'Druida':8, 'Hechicero':6, 'Mago':6 };
+
+// ===================== WEAPON DAMAGE (type die + rarity bonus) =====================
+const WEAPON_DAMAGE_DICE = [
+    { keywords:['daga','cuchillo','navaja','puño','puño desnudo','honda'], die:4 },
+    { keywords:['espada corta','maza','martillo ligero','hoz','bastón','baston','varita','garrote'], die:6 },
+    { keywords:['espada','estoque','hacha','arco','ballesta','lanza','látigo','latigo','cimitarra','tridente'], die:8 },
+    { keywords:['espada larga','martillo de guerra','alabarda','arco largo'], die:10 },
+    { keywords:['mandoble','espadón','espadon','gran hacha','hacha grande','espada a dos manos'], die:12 }
+];
+const RARITY_BONUS = { 'común':0, 'comun':0, 'poco común':1, 'poco comun':1, 'raro':2, 'rara':2, 'épico':3, 'épica':3, 'epico':3, 'legendario':4, 'legendaria':4 };
+
+function getWeaponDamage(nameOrItem) {
+    const name = (typeof nameOrItem === 'string' ? nameOrItem : (nameOrItem?.name || '')).toLowerCase();
+    let rarity = 'común';
+    if (typeof nameOrItem === 'object' && nameOrItem?.rarity) rarity = nameOrItem.rarity.toLowerCase();
+    else {
+        // Detect rarity words in the name itself ("espada larga legendaria")
+        for (const r of Object.keys(RARITY_BONUS)) { if (RARITY_BONUS[r] > 0 && name.includes(r)) { rarity = r; break; } }
+    }
+    let die = 6, best = 0;
+    for (const w of WEAPON_DAMAGE_DICE) for (const k of w.keywords) {
+        if (name.includes(k) && k.length > best) { best = k.length; die = w.die; }
+    }
+    if (!best && (!name || name.includes('puñetazo') || name.includes('desarmado'))) die = 4;
+    return { die, bonus: RARITY_BONUS[rarity] ?? 0 };
+}
+function rollWeaponDamage(nameOrItem, crit) {
+    const { die, bonus } = getWeaponDamage(nameOrItem);
+    let roll = Math.floor(Math.random()*die)+1;
+    if (crit) roll += Math.floor(Math.random()*die)+1; // crit: double dice
+    return { die, roll, bonus, crit: !!crit, total: roll + bonus };
+}
+// Roll a die expression like "d6", "2d4+1", "d8+2"
+function rollDieExpr(expr) {
+    const m = /^(\d*)d(\d+)([+-]\d+)?$/.exec((expr || 'd6').trim());
+    if (!m) return Math.floor(Math.random()*6)+1;
+    const n = parseInt(m[1] || '1'), d = parseInt(m[2]), b = parseInt(m[3] || '0');
+    let t = b;
+    for (let i = 0; i < n; i++) t += Math.floor(Math.random()*d)+1;
+    return Math.max(1, t);
+}
+
+// ===================== CONDITIONS =====================
+const CONDITIONS = {
+    envenenado: { name:'Envenenado', emoji:'🤢', effect:'dis',  dot:4, desc:'Desventaja en tiradas y 1d4 de daño por turno' },
+    sangrando:  { name:'Sangrando',  emoji:'🩸', effect:null,   dot:4, desc:'1d4 de daño por turno' },
+    aturdido:   { name:'Aturdido',   emoji:'💫', effect:'dis',  dot:0, desc:'Desventaja en todas las tiradas' },
+    paralizado: { name:'Paralizado', emoji:'🧊', effect:'dis',  dot:0, desc:'Apenas puedes moverte: desventaja en todo' },
+    asustado:   { name:'Asustado',   emoji:'😱', effect:'dis',  dot:0, desc:'Desventaja mientras la fuente del miedo esté presente' },
+    cegado:     { name:'Cegado',     emoji:'🕶️', effect:'dis',  dot:0, desc:'Desventaja en tiradas que dependan de la vista' },
+    exhausto:   { name:'Exhausto',   emoji:'😮‍💨', effect:'dis', dot:0, desc:'Desventaja por fatiga extrema' },
+    bendecido:  { name:'Bendecido',  emoji:'✨', effect:'adv',  dot:0, desc:'Ventaja en tus tiradas' },
+    inspirado:  { name:'Inspirado',  emoji:'🎵', effect:'adv',  dot:0, desc:'Ventaja gracias a inspiración' },
+    oculto:     { name:'Oculto',     emoji:'🌫️', effect:'adv',  dot:0, desc:'Ventaja en ataques y sigilo mientras no te detecten' }
+};
+
+// ===================== BESTIARY =====================
+// damage uses die expressions ("d6", "d8+1"). xp awarded on kill.
+const BESTIARY = {
+    rata_gigante:    { name:'Rata Gigante',      hp:7,  attackBonus:2, damage:'d4',    xp:10,  tier:'trivial' },
+    kobold:          { name:'Kobold',            hp:5,  attackBonus:4, damage:'d4',    xp:10,  tier:'trivial' },
+    goblin:          { name:'Goblin',            hp:7,  attackBonus:4, damage:'d6',    xp:15,  tier:'fácil' },
+    lobo:            { name:'Lobo',              hp:11, attackBonus:3, damage:'d6',    xp:20,  tier:'fácil' },
+    bandido:         { name:'Bandido',           hp:11, attackBonus:3, damage:'d6',    xp:25,  tier:'fácil' },
+    cultista:        { name:'Cultista',          hp:9,  attackBonus:3, damage:'d6',    xp:25,  tier:'fácil' },
+    esqueleto:       { name:'Esqueleto',         hp:13, attackBonus:4, damage:'d6',    xp:25,  tier:'fácil' },
+    zombi:           { name:'Zombi',             hp:22, attackBonus:3, damage:'d6+1',  xp:30,  tier:'normal' },
+    guardia_corrupto:{ name:'Guardia Corrupto',  hp:14, attackBonus:4, damage:'d8',    xp:40,  tier:'normal' },
+    mercenario:      { name:'Mercenario',        hp:16, attackBonus:4, damage:'d8',    xp:45,  tier:'normal' },
+    orco_guerrero:   { name:'Orco Guerrero',     hp:15, attackBonus:5, damage:'d8+1',  xp:50,  tier:'normal' },
+    arana_gigante:   { name:'Araña Gigante',     hp:16, attackBonus:5, damage:'d8',    xp:60,  tier:'normal', condition:'envenenado' },
+    gul:             { name:'Gul',               hp:18, attackBonus:4, damage:'d6+1',  xp:70,  tier:'difícil', condition:'paralizado' },
+    mago_oscuro:     { name:'Mago Oscuro',       hp:14, attackBonus:5, damage:'d10',   xp:80,  tier:'difícil' },
+    oso:             { name:'Oso Pardo',         hp:25, attackBonus:5, damage:'d8+2',  xp:80,  tier:'difícil' },
+    espectro:        { name:'Espectro',          hp:16, attackBonus:5, damage:'d8',    xp:90,  tier:'difícil', condition:'asustado' },
+    capitan_bandido: { name:'Capitán Bandido',   hp:26, attackBonus:6, damage:'d8+2',  xp:110, tier:'difícil' },
+    ogro:            { name:'Ogro',              hp:30, attackBonus:6, damage:'d10+1', xp:120, tier:'muy difícil' },
+    troll:           { name:'Troll',             hp:40, attackBonus:6, damage:'d10+2', xp:150, tier:'muy difícil' },
+    vampiro_menor:   { name:'Vampiro Menor',     hp:35, attackBonus:7, damage:'d8+2',  xp:200, tier:'muy difícil', condition:'sangrando' },
+    joven_dragon:    { name:'Dragón Joven',      hp:60, attackBonus:8, damage:'d12+3', xp:400, tier:'legendario' }
+};
+
+// ===================== PROFICIENCY (knowledge → skill bonus) =====================
+const SKILL_PROFICIENCY_MAP = {
+    'Ataque':        ['weapon_mastery','martial_arts','combat_mastery','archery','ki_arts'],
+    'Combate':       ['weapon_mastery','martial_arts','combat_mastery','military_tactics','ki_arts'],
+    'Fuerza':        ['weapon_mastery','combat_mastery'],
+    'Atletismo':     ['martial_arts','survival'],
+    'Sigilo':        ['stealth_arts'],
+    'Hurto':         ['stealth_arts','lockpicking'],
+    'Acrobacias':    ['martial_arts','ki_arts'],
+    'Magia':         ['arcane_theory','innate_magic','nature_magic','divine_magic','arcane_basics','nature_basics','metamagic','healing_arts'],
+    'Arcanos':       ['arcane_theory','arcane_lore','spellbook_read','innate_magic','metamagic'],
+    'Historia':      ['world_lore','religious_lore','arcane_lore','street_lore','divine_lore'],
+    'Investigación': ['arcane_lore','street_lore','world_lore','tracking'],
+    'Conocimiento':  ['world_lore','arcane_lore','divine_lore','religious_lore','beast_lore','undead_lore','street_lore'],
+    'Percepción':    ['meditation','tracking'],
+    'Medicina':      ['healing_arts','herbalism'],
+    'Naturaleza':    ['beast_lore','herbalism','nature_magic','survival','nature_basics'],
+    'Supervivencia': ['survival','tracking','herbalism'],
+    'Persuasión':    ['performance','world_lore'],
+    'Engaño':        ['street_lore'],
+    'Intimidación':  ['military_tactics','combat_mastery'],
+    'Actuación':     ['performance'],
+    'Resistencia':   ['meditation'],
+    'Constitución':  ['meditation']
+};
+function getProficiencyBonus(skill) {
+    const knowledges = state.gameState?.knowledges || [];
+    if (!knowledges.length || !skill) return 0;
+    const ids = SKILL_PROFICIENCY_MAP[skill] || [];
+    const skillLower = skill.toLowerCase();
+    let lvl = 0;
+    for (const k of knowledges) {
+        if (ids.includes(k.id) || (k.name && k.name.toLowerCase().includes(skillLower))) lvl = Math.max(lvl, k.level || 1);
+    }
+    if (!lvl) return 0;
+    return lvl >= 3 ? 3 : 2;
+}
+
+// ===================== STARTING GOLD BY BACKGROUND =====================
+const BACKGROUND_GOLD = { 'Soldado':25, 'Criminal':20, 'Noble':60, 'Huérfano':5, 'Mercader':45, 'Erudito':20, 'Marginado':8 };
+
+// ===================== LEVEL-UP CLASS ABILITIES =====================
+// Granted sequentially at odd levels (3, 5, 7...)
+const CLASS_LEVEL_ABILITIES = {
+    'Guerrero': [
+        { id:'shield_bash',     name:'Golpe de Escudo',      category:'combat', stat:'FUE', dcBonus:0, description:'Aturdir brevemente a un enemigo con el escudo.' },
+        { id:'battle_cry',      name:'Grito de Batalla',     category:'combat', stat:'CAR', dcBonus:0, description:'Intimidar a todos los enemigos cercanos.' },
+        { id:'whirlwind',       name:'Torbellino de Acero',  category:'combat', stat:'FUE', dcBonus:2, description:'Atacar a todos los enemigos adyacentes de un giro.' }
+    ],
+    'Mago': [
+        { id:'fireball',        name:'Bola de Fuego',        category:'spell', stat:'INT', dcBonus:2, description:'Explosión de fuego que daña a varios enemigos.' },
+        { id:'invisibility',    name:'Invisibilidad',        category:'spell', stat:'INT', dcBonus:2, description:'Volverse invisible durante unos minutos.' },
+        { id:'counterspell',    name:'Contrahechizo',        category:'spell', stat:'INT', dcBonus:2, description:'Anular la magia de un enemigo.' }
+    ],
+    'Pícaro': [
+        { id:'smoke_bomb',      name:'Bomba de Humo',        category:'skill',  stat:'DES', dcBonus:0, description:'Escapar o reposicionarse en una nube de humo.' },
+        { id:'poison_blade',    name:'Hoja Envenenada',      category:'combat', stat:'DES', dcBonus:0, description:'Impregnar el arma: el próximo golpe envenena.' },
+        { id:'shadow_step',     name:'Paso Sombrío',         category:'skill',  stat:'DES', dcBonus:2, description:'Moverse entre sombras sin ser visto.' }
+    ],
+    'Clérigo': [
+        { id:'mass_heal',       name:'Curación en Grupo',    category:'spell', stat:'SAB', dcBonus:2, description:'Sanar a todos los aliados cercanos.' },
+        { id:'divine_shield',   name:'Escudo Divino',        category:'spell', stat:'SAB', dcBonus:0, description:'Barrera sagrada que absorbe daño.' },
+        { id:'resurrection',    name:'Plegaria de Vida',     category:'spell', stat:'SAB', dcBonus:3, description:'Estabilizar a un aliado moribundo al instante.' }
+    ],
+    'Bardo': [
+        { id:'song_of_rest',    name:'Canción de Descanso',  category:'social', stat:'CAR', dcBonus:0, description:'Melodía que restaura ánimo y algo de HP al grupo.' },
+        { id:'hypnotic_tune',   name:'Melodía Hipnótica',    category:'spell',  stat:'CAR', dcBonus:2, description:'Fascinar a una audiencia u objetivo.' },
+        { id:'cutting_words',   name:'Palabras Hirientes',   category:'social', stat:'CAR', dcBonus:0, description:'Sabotear la moral de un enemigo (le impone desventaja).' }
+    ],
+    'Druida': [
+        { id:'thorn_whip',      name:'Látigo de Espinas',    category:'spell', stat:'SAB', dcBonus:0, description:'Atacar y atraer a un enemigo con espinas.' },
+        { id:'summon_beast',    name:'Invocar Bestia',       category:'spell', stat:'SAB', dcBonus:2, description:'Llamar a un animal salvaje en tu ayuda.' },
+        { id:'storm_call',      name:'Llamar Tormenta',      category:'spell', stat:'SAB', dcBonus:3, description:'Invocar rayos sobre el campo de batalla.' }
+    ],
+    'Explorador': [
+        { id:'volley',          name:'Lluvia de Flechas',    category:'combat', stat:'DES', dcBonus:2, description:'Disparar a varios enemigos a la vez.' },
+        { id:'animal_companion',name:'Compañero Animal',     category:'skill',  stat:'SAB', dcBonus:0, description:'Vincularte con una bestia que te acompaña.' },
+        { id:'camouflage',      name:'Camuflaje Perfecto',   category:'skill',  stat:'DES', dcBonus:0, description:'Volverse casi invisible en terreno natural.' }
+    ],
+    'Paladín': [
+        { id:'holy_weapon',     name:'Arma Sagrada',         category:'combat', stat:'FUE', dcBonus:0, description:'Imbuir el arma con luz divina (daño extra a no-muertos).' },
+        { id:'aura_courage',    name:'Aura de Coraje',       category:'spell',  stat:'CAR', dcBonus:0, description:'Los aliados cercanos no pueden ser asustados.' },
+        { id:'divine_judgment', name:'Juicio Divino',        category:'combat', stat:'FUE', dcBonus:3, description:'Golpe devastador contra un enemigo malvado.' }
+    ],
+    'Hechicero': [
+        { id:'twin_spell',      name:'Hechizo Gemelo',       category:'spell', stat:'INT', dcBonus:2, description:'Duplicar un hechizo para afectar a dos objetivos.' },
+        { id:'elemental_form',  name:'Forma Elemental',      category:'spell', stat:'INT', dcBonus:2, description:'Envolverse en fuego, hielo o rayo brevemente.' },
+        { id:'arcane_storm',    name:'Tormenta Arcana',      category:'spell', stat:'INT', dcBonus:3, description:'Descarga caótica que golpea a todos los enemigos.' }
+    ],
+    'Monje': [
+        { id:'pressure_point',  name:'Punto de Presión',     category:'combat', stat:'DES', dcBonus:0, description:'Golpe preciso que paraliza un miembro del enemigo.' },
+        { id:'ki_blast',        name:'Onda de Ki',           category:'combat', stat:'SAB', dcBonus:2, description:'Proyectar energía interior a distancia.' },
+        { id:'iron_body',       name:'Cuerpo de Hierro',     category:'combat', stat:'CON', dcBonus:0, description:'Endurecer el cuerpo: reduce el daño recibido un turno.' }
+    ]
+};
+
 // ===================== SESSION STATE =====================

@@ -24,7 +24,7 @@ async function generateNpcPortrait(npc) {
     const prompt = encodeURIComponent(`${genderHint} ${raceHint} ${visualHint}, semi-realistic digital painting, D&D NPC character portrait, artstation quality, dramatic lighting, fantasy, detailed face`);
     const url = `https://image.pollinations.ai/prompt/${prompt}?width=256&height=256&seed=${Math.floor(Math.random()*9999)}&nologo=true`;
     npc.portrait = url;
-    fsSaveGameState(state.activeCharId);
+    saveGameStateFor(state.activeCharId, state.gameState);
     const panel = document.getElementById('npcModalContent');
     if (panel) renderNpcModalContent();
 }
@@ -65,7 +65,7 @@ function processLearnUpdate(update) {
         }
     }
 
-    fsSaveGameState(state.activeCharId);
+    saveGameStateFor(state.activeCharId, state.gameState);
     const panel = document.getElementById('knowledgeModalContent');
     if (panel) renderKnowledgeModalContent();
 }
@@ -79,6 +79,11 @@ function processNpcUpdate(update) {
     const sanitizedName = update.name.trim();
     const existing = state.gameState.npcs.find(n => n.name.toLowerCase() === sanitizedName.toLowerCase());
     if (existing) {
+        // Harden: old/synced NPC records may lack these arrays — without this, .push() throws
+        // and the exception aborts the whole DM response (this was the "NPCs stopped working" bug)
+        if (!Array.isArray(existing.knownFacts)) existing.knownFacts = [];
+        if (!Array.isArray(existing.goodMemories)) existing.goodMemories = [];
+        if (!Array.isArray(existing.badMemories)) existing.badMemories = [];
         if (update.relationship !== undefined) {
             const rel = parseInt(update.relationship);
             if (!isNaN(rel)) {
@@ -128,10 +133,16 @@ function processNpcUpdate(update) {
         const goodMemories = Array.isArray(update.goodMemory) ? update.goodMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim()) : (typeof update.goodMemory === 'string' && update.goodMemory.trim() !== '') ? [update.goodMemory.trim()] : [];
         const badMemories = Array.isArray(update.badMemory) ? update.badMemory.filter(m => typeof m === 'string' && m.trim() !== '').map(m => m.trim()) : (typeof update.badMemory === 'string' && update.badMemory.trim() !== '') ? [update.badMemory.trim()] : [];
         const npc = { id: name.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now(), name, race, role, gender, portrait: null, portraitHint, relationship, relationshipLabel: tier.label, knownFacts, goodMemories, badMemories, lastSeen, notes };
+        if (update.maxRelationship !== undefined) {
+            const cap = parseInt(update.maxRelationship);
+            if (!isNaN(cap)) npc.maxRelationship = Math.min(5, Math.max(-3, cap));
+        }
+        if (Array.isArray(update.biases)) npc.biases = update.biases.filter(b => typeof b === 'string' && b.trim() !== '');
+        if (typeof update.personality === 'string' && update.personality.trim() !== '') npc.personality = update.personality.trim();
         state.gameState.npcs.push(npc);
         generateNpcPortrait(npc);
     }
-    fsSaveGameState(state.activeCharId);
+    saveGameStateFor(state.activeCharId, state.gameState);
     const panel = document.getElementById('npcModalContent');
     if (panel) renderNpcModalContent();
 }

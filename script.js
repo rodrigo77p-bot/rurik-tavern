@@ -273,6 +273,23 @@ function loadCharacter(charId) {
         const defaultOutfit = CLASS_DEFAULT_OUTFIT[state.character.classe] || { ropa:'', arma:'', offhand:'', accesorio:'' };
         state.gameState.equipped = { ...defaultOutfit };
     }
+    // Migrate: gold, quests, conditions (new mechanics)
+    if (typeof state.gameState.gold !== 'number') {
+        state.gameState.gold = BACKGROUND_GOLD[state.character.background] ?? 15;
+    }
+    if (!Array.isArray(state.gameState.quests)) {
+        state.gameState.quests = [];
+        // Convert old single quest string into a journal entry
+        if (state.gameState.quest && state.gameState.quest !== 'Aventura libre') {
+            state.gameState.quests.push({ id:'mision_inicial', title: state.gameState.quest.slice(0, 80), status:'activa', notes:[], created: new Date().toISOString().slice(0,10) });
+        }
+    }
+    if (!Array.isArray(state.gameState.conditions)) state.gameState.conditions = [];
+    // Stale combat from an interrupted session: clear it (the AI can restart it)
+    if (state.gameState.combat && !state.gameState.combat.active) state.gameState.combat = null;
+    // If saved with 0 HP but still alive (closed app while dying) → stabilized at 1 HP
+    if (state.gameState.hp <= 0 && state.character.status === 'alive') state.gameState.hp = 1;
+    state.dying = null;
     state.chatHistory = getChatHistory(charId);
     state.adventure = getAdventure(charId);
     state.turnCount = 0;
@@ -433,9 +450,11 @@ function renderChatScreen() {
         <div class="status-bar">
             <button class="menu-btn" id="menuBtn">☰</button>
             <div>❤️ <span id="hpDisplay">${state.gameState.hp}/${state.gameState.maxHp}</span></div>
+            <div>💰 <span id="goldDisplay">${state.gameState.gold ?? 0}</span></div>
+            <div id="conditionsDisplay" style="display:none"></div>
             <div>📍 <span id="locationDisplay">${state.gameState.location}</span></div>
             <div>🌙 <span id="timeDisplay">${state.gameState.timeOfDay}</span></div>
-            <div>🎒 <span id="inventoryDisplay">${state.gameState.inventory.join(', ')||'Vacío'}</span></div>
+            <div>🎒 <span id="inventoryDisplay">${state.gameState.inventory.map(i=>typeof i==='string'?i:i.name).join(', ')||'Vacío'}</span></div>
             <div>⚔️ <span id="levelDisplay">Nivel 1 (0/100 XP)</span></div>
         </div>
         <div id="menuModal" class="modal hidden"><div class="modal-box">
@@ -446,6 +465,7 @@ function renderChatScreen() {
             <button class="modal-btn" id="switchCharBtn">🔄 Cambiar Personaje</button>
             <button class="modal-btn" id="manageInventoryBtn">🎒 Gestionar Inventario</button>
             <button class="modal-btn" id="knowledgeMenuBtn">📖 Conocimientos y Habilidades</button>
+            <button class="modal-btn" id="questMenuBtn">🗒️ Diario de Misiones</button>
             <button class="modal-btn" id="viewLegacyBtn">📜 Ver Legado del Mundo</button>
             <button class="modal-btn" id="viewMemoryBtn">🧠 Ver Memoria de la Historia</button>
             <button class="modal-btn" id="logoutBtn">🚪 Cerrar Sesión</button>
@@ -465,6 +485,11 @@ function renderChatScreen() {
                 <button class="modal-btn" id="closeKnowledgeBtn" style="margin-top:0.75rem">✓ Cerrar</button>
             </div>
         </div>
+        <div id="questModal" class="modal hidden"><div class="modal-box" style="max-width:520px;max-height:80vh;overflow-y:auto">
+            <div class="modal-title">🗒️ Diario de Misiones</div>
+            <div id="questModalContent"></div>
+            <button class="modal-btn" id="closeQuestBtn" style="margin-top:0.75rem">✓ Cerrar</button>
+        </div></div>
         <div id="legacyModal" class="modal hidden"><div class="modal-box" style="max-width:480px">
             <div class="modal-title">📜 Legado del Mundo</div>
             <div id="legacyList" class="legacy-modal-list"></div>
@@ -517,6 +542,7 @@ function renderChatScreen() {
         </div>
         <div class="game-layout">
             <div class="chat-area">
+                <div id="combatPanel" class="combat-panel hidden"></div>
                 <div class="chat-container" id="chatContainer"></div>
                 <div class="input-area">
                     <input type="text" id="playerInput" placeholder="¿Qué haces?" autocomplete="off">
@@ -767,6 +793,17 @@ function bindCharacterCreation() {
     const createBtn = document.getElementById('createCharBtn');
 
     function checkValidity() { createBtn.disabled = !(nameInput.value.trim() && raceSelect.value && classSelect.value && bgSelect.value && state.tempStats); }
+    function renderStatsPreview() {
+        if (!state.tempStats) return;
+        const race = raceSelect.value;
+        const finalStats = race ? applyRaceBonuses(state.tempStats, race) : state.tempStats;
+        const bonuses = RACE_STAT_BONUSES[race] || {};
+        statsDisplay.innerHTML = Object.entries(finalStats).map(([ab,v])=>{
+            const m=Math.floor((v-10)/2);
+            const hasBonus = bonuses[ab] ? ` <span style="color:var(--accent)">(+${bonuses[ab]} racial)</span>` : '';
+            return `${ab} ${v}${hasBonus} (${m>=0?'+':''}${m})`;
+        }).join(' · ') + (race && Object.keys(bonuses).length ? `<br><span style="font-size:0.72rem;color:var(--accent)">Bonos raciales de ${race} aplicados</span>` : '');
+    }
     rollBtn.addEventListener('click', () => {
         const stats = {};
         ['FUE','DES','CON','INT','SAB','CAR'].forEach(ab => {
@@ -774,9 +811,10 @@ function bindCharacterCreation() {
             stats[ab] = rolls.reduce((a,b)=>a+b,0);
         });
         state.tempStats = stats;
-        statsDisplay.textContent = Object.entries(stats).map(([ab,v])=>{const m=Math.floor((v-10)/2);return `${ab} ${v} (${m>=0?'+':''}${m})`;}).join(' · ');
+        renderStatsPreview();
         checkValidity();
     });
+    raceSelect.addEventListener('change', renderStatsPreview);
     // Auto-fill outfit when class is selected
     classSelect.addEventListener('change', () => {
         const cls = classSelect.value;
@@ -797,7 +835,8 @@ function bindCharacterCreation() {
     document.getElementById('backToHubBtn').addEventListener('click', () => showScreen('characterHub'));
     createBtn.addEventListener('click', () => {
         const id = generateId();
-        const conMod = Math.floor((state.tempStats.CON-10)/2);
+        const finalStats = applyRaceBonuses(state.tempStats, raceSelect.value);
+        const conMod = Math.floor((finalStats.CON-10)/2);
         const cls = classSelect.value;
         const defaultOutfit = CLASS_DEFAULT_OUTFIT[cls] || { ropa:'', arma:'', offhand:'', accesorio:'' };
         const equipped = {
@@ -812,7 +851,7 @@ function bindCharacterCreation() {
             gender: document.getElementById('charGender').value,
             appearance: document.getElementById('charAppearance').value.trim(),
             portraitSeed: Math.floor(Math.random() * 99999),
-            stats: state.tempStats, status:'alive', created: new Date().toISOString().slice(0,10),
+            stats: finalStats, status:'alive', created: new Date().toISOString().slice(0,10),
             experience: 0, level: 1, skillPoints: 0
         };
         updateCharData(char);
@@ -820,7 +859,7 @@ function bindCharacterCreation() {
         setActiveCharId(id);
         state.character = char;
         const startingKnowledge = CLASS_STARTING_KNOWLEDGE[char.classe] || { knowledges:[], learnedAbilities:[] };
-        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], knowledges: startingKnowledge.knowledges.map(k=>({...k})), learnedAbilities: startingKnowledge.learnedAbilities.map(a=>({...a})), skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'', equipped };
+        const gs = { location:'Taberna de Rurik', timeOfDay:'Tarde', hp:10+conMod, maxHp:10+conMod, inventory:[], quest:'', summary:'', companions:[], relationships:{}, npcs:[], knowledges: startingKnowledge.knowledges.map(k=>({...k})), learnedAbilities: startingKnowledge.learnedAbilities.map(a=>({...a})), skillUses:{combat:0,magic:0,stealth:0,social:0,nature:0}, classEvolution:'', curse:'', equipped, gold: BACKGROUND_GOLD[bgSelect.value] ?? 15, quests: [], conditions: [], combat: null };
         Object.assign(state.gameState, gs);
         state.chatHistory = [];
         state.adventure = null;
@@ -899,9 +938,10 @@ function openNpcModal() {
 window.adjustNpcRel = function(idx, delta) {
     const npc = state.gameState.npcs[idx];
     if (!npc) return;
-    npc.relationship = Math.max(-3, Math.min(5, npc.relationship + delta));
+    const cap = npc.maxRelationship !== undefined ? npc.maxRelationship : 5;
+    npc.relationship = Math.max(-3, Math.min(cap, npc.relationship + delta));
     npc.relationshipLabel = getNpcRelTier(npc.relationship).label;
-    fsSaveGameState(state.activeCharId);
+    saveGameStateFor(state.activeCharId, state.gameState);
     renderNpcModalContent();
 };
 
@@ -915,19 +955,20 @@ window.regenNpcPortrait = function(idx) {
 window.deleteNpc = function(idx) {
     if (!confirm('Eliminar este personaje del registro?')) return;
     state.gameState.npcs.splice(idx, 1);
-    fsSaveGameState(state.activeCharId);
+    saveGameStateFor(state.activeCharId, state.gameState);
     renderNpcModalContent();
 };
 
 window.saveNpcNotes = function(idx, text) {
-    if (state.gameState.npcs[idx]) { state.gameState.npcs[idx].notes = text; fsSaveGameState(state.activeCharId); }
+    if (state.gameState.npcs[idx]) { state.gameState.npcs[idx].notes = text; saveGameStateFor(state.activeCharId, state.gameState); }
 };
 
 
 function bindChat() {
     const playerInput = document.getElementById('playerInput');
     const sendBtn = document.getElementById('sendBtn');
-    renderChat(); updatePartyPanel(); updateStatus(); updateMemoryIndicator();
+    renderChat(); updatePartyPanel(); updateStatus(); updateMemoryIndicator(); renderCombatPanel();
+    if (state.dying) renderDeathSaveWidget();
     playerInput.focus();
 
     async function sendMessage() {
@@ -966,20 +1007,23 @@ function bindChat() {
             }
 
             // Apply the points to the selected stat
+            const oldConMod = Math.floor((state.character.stats.CON - 10) / 2);
             state.character.stats[stat] += points;
             state.character.skillPoints -= points;
 
             // Check for class evolution after increasing stats
             updateClassEvolution();
 
-            // Update max HP if CON was increased
+            // If CON mod increased, add retroactive HP per level (never reset maxHp — it includes level-up gains)
             if (stat === 'CON') {
-                const conMod = Math.floor((state.character.stats.CON - 10) / 2);
-                state.gameState.maxHp = 10 + conMod;
-                if (state.gameState.hp > state.gameState.maxHp) {
-                    state.gameState.hp = state.gameState.maxHp;
+                const newConMod = Math.floor((state.character.stats.CON - 10) / 2);
+                const diff = (newConMod - oldConMod) * (state.character.level || 1);
+                if (diff > 0) {
+                    state.gameState.maxHp += diff;
+                    state.gameState.hp += diff;
                 }
             }
+            updateCharData(state.character);
 
             addDMMessage(`Has asignado ${points} punto(s) a ${stat}. Nueva estadística: ${stat} ${state.character.stats[stat]} (${Math.floor((state.character.stats[stat]-10)/2)>=0?'+':''}${Math.floor((state.character.stats[stat]-10)/2)})`);
             updateStatus();
@@ -992,6 +1036,7 @@ function bindChat() {
         // Clear input immediately so user can prepare next action
         playerInput.value = '';
         state.pendingRoll = null; // clear any stale roll
+        state.needsConditionTick = true; // conditions tick once per player turn (consumed in callAndRespond)
 
         // Check if action requires a roll BEFORE sending to AI
         // (skipped for action-chip clicks — AI requests roll via [ROLL:])
@@ -1076,6 +1121,12 @@ function bindChat() {
     });
     document.getElementById('knowledgeMenuBtn').addEventListener('click', () => {
         document.getElementById('menuModal').classList.add('hidden'); openKnowledgeModal();
+    });
+    document.getElementById('questMenuBtn').addEventListener('click', () => {
+        document.getElementById('menuModal').classList.add('hidden'); openQuestModal();
+    });
+    document.getElementById('closeQuestBtn').addEventListener('click', () => {
+        document.getElementById('questModal').classList.add('hidden');
     });
     document.getElementById('closeKnowledgeBtn').addEventListener('click', () => {
         document.getElementById('knowledgeModal').classList.add('hidden');
