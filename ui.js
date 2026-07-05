@@ -47,10 +47,10 @@ async function sendCompanionMessage() {
         const response = await fetch(AI_API_URL, {
             method:'POST',
             headers:{ 'Content-Type':'application/json','Authorization':`Bearer ${state.apiKey}` },
-            body: JSON.stringify({ model: AI_MODELS[0], models: AI_MODELS, messages:[{role:'system',content:system},{role:'user',content:recentHistory+'\n'+char.name+': '+text}], temperature:0.85, max_tokens:200 })
+            body: JSON.stringify({ model: AI_MODELS[0], models: AI_MODELS, reasoning: { enabled: false, exclude: true }, messages:[{role:'system',content:system},{role:'user',content:recentHistory+'\n'+char.name+': '+text}], temperature:0.85, max_tokens:200 })
         });
         const data = await response.json();
-        const reply = (data?.choices?.[0]?.message?.content || '').trim().replace(/^[^:]+:\s*/,'');
+        const reply = stripReasoning((data?.choices?.[0]?.message?.content || '').trim()).replace(/^[^:]+:\s*/,'');
         if (!reply) throw new Error(data?.error?.message || 'respuesta vacía de la IA');
         companionChats[activeChatCompanion].push({ role:'companion', content: reply });
         renderCompanionChat();

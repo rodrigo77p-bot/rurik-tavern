@@ -419,6 +419,9 @@ async function callAiApi(playerAction, rollResult) {
         body: JSON.stringify({
             model: AI_MODELS[0],
             models: AI_MODELS,
+            // Desactivar el razonamiento interno de los modelos que lo tengan
+            // (evita que se cuele texto de "pensamiento" en la narración)
+            reasoning: { enabled: false, exclude: true },
             messages:[
                 {role:'system',content:system},
                 ...historyMessages,
@@ -436,7 +439,23 @@ async function callAiApi(playerAction, rollResult) {
         const detail = data?.error?.message || JSON.stringify(data).slice(0, 300);
         throw new Error(`OpenRouter respuesta inválida: ${detail}`);
     }
-    return content;
+    return stripReasoning(content);
+}
+
+// Elimina restos de "pensamiento interno" que algunos modelos gratuitos
+// filtran en la respuesta: bloques <think>...</think> o meta-comentarios
+// en inglés antes de la respuesta final.
+function stripReasoning(text) {
+    let t = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    // Si el modelo empezó con meta-comentarios y luego "final answer:"/"final response:",
+    // quedarse solo con lo que viene después (solo si el marcador está al principio,
+    // para no recortar narración legítima).
+    const finalMarker = t.match(/(?:so\s+)?final\s+(?:answer|response|output)\s*:?\s*\n/i);
+    if (finalMarker && finalMarker.index < 300) {
+        const after = t.slice(finalMarker.index + finalMarker[0].length).trim();
+        if (after.length > 40) t = after;
+    }
+    return t;
 }
 
 
@@ -562,13 +581,14 @@ Responde SOLO en este formato JSON (sin texto adicional):
             body: JSON.stringify({
                 model: AI_MODELS[0],
                 models: AI_MODELS,
+                reasoning: { enabled: false, exclude: true },
                 messages:[{role:'user', content:prompt}],
                 temperature:0.2,
                 max_tokens:600
             })
         });
         const d = await r.json();
-        const raw = (d?.choices?.[0]?.message?.content || '').trim();
+        const raw = stripReasoning((d?.choices?.[0]?.message?.content || '').trim());
         if (!raw) throw new Error('OpenRouter respuesta vacía en consolidación de memoria');
 
         // Try to parse structured memory
