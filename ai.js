@@ -351,6 +351,7 @@ SISTEMA DE CONDICIONES: aplica o quita estados con [CONDITION: {"add":[{"id":"en
 DIARIO DE MISIONES: cuando el jugador acepte, avance, complete o falle una misión añade [QUEST: {"id":"id_corto","title":"Título breve","status":"activa|completada|fallida","note":"novedad concreta"}].
 
 Al final, en ESTE ORDEN exacto:
+REGLA DE FORMATO ABSOLUTA: los nombres de los bloques ([ACTIONS:], [STATE:], [ROLL:], [NPC:], etc.) son identificadores LITERALES del sistema: escríbelos SIEMPRE en inglés, en mayúsculas, exactamente como se muestran. NUNCA los traduzcas (NO uses [ACCIONES:], [ESTADO:], [TIRADA:]...). NUNCA emitas etiquetas de cierre tipo [/ACTIONS]. Cada bloque abre con [ y cierra con ] en la misma emisión. Fuera de los bloques, escribe SOLO narración en español, sin comentarios sobre el formato.
 [ACTIONS: ["acción 1", "acción 2", "acción 3"]]
 [STATE: {"hp":N,"location":"X","timeOfDay":"X","inventory":[],"quest":"X","summary":"2 frases","companions":[],"relationships":{},"curse":""}]
 Si el resultado es incierto AÑADE TAMBIÉN:
@@ -397,7 +398,7 @@ async function callAiApi(playerAction, rollResult) {
         } else if (msg.role === 'dm') {
             // Strip [STATE:], [ACTIONS:], [ROLL:], [NPC:] blocks from assistant messages
             // to keep token count manageable while preserving narrative
-            const cleanContent = msg.content
+            const cleanContent = normalizeTags(msg.content)
                 .replace(/\[STATE:[\s\S]*?\]/g, '')
                 .replace(/\[ACTIONS:[\s\S]*?\]/g, '')
                 .replace(/\[ROLL:[\s\S]*?\]/g, '')
@@ -496,7 +497,27 @@ function extractTagBlock(text, tag) {
     return { match: text.slice(idx), content: text.slice(contentStart).trim() };
 }
 
+// Algunos modelos gratuitos traducen los nombres de las etiquetas al español
+// ([ESTADO:] en vez de [STATE:]) o emiten pseudo-cierres como [/ACTIONS: []].
+// Normalizar antes de parsear para que ningún bloque escape al parser.
+const TAG_ALIASES = {
+    'ESTADO':'STATE', 'ACCIONES':'ACTIONS', 'TIRADA':'ROLL', 'TIRADAS':'ROLL',
+    'PNJ':'NPC', 'PERSONAJE':'NPC', 'APRENDER':'LEARN', 'APRENDIZAJE':'LEARN',
+    'MISION':'QUEST', 'MISIÓN':'QUEST', 'COMBATE':'COMBAT', 'ORO':'GOLD',
+    'CONDICION':'CONDITION', 'CONDICIÓN':'CONDITION', 'LEGADO':'LEGACY'
+};
+function normalizeTags(text) {
+    let t = text;
+    // Pseudo-cierres tipo [/ACTIONS: []], [/STATE], [/ESTADO: {}] → fuera
+    t = t.replace(/\[\s*\/\s*[A-ZÁÉÍÓÚÑa-záéíóúñ]+\s*:?\s*(\[\s*\]|\{\s*\})?\s*\]/g, '');
+    for (const [alias, tag] of Object.entries(TAG_ALIASES)) {
+        t = t.replace(new RegExp('\\[\\s*' + alias + '\\s*:', 'gi'), '[' + tag + ':');
+    }
+    return t;
+}
+
 function parseLlmResponse(response) {
+    response = normalizeTags(response);
     let narration = response;
     let stateUpdates = null, actions = [], legacy = null, deathNarration = null, rollRequest = null;
 
@@ -544,6 +565,9 @@ function parseLlmResponse(response) {
     const combatUpdate = extractAll('COMBAT')[0] || null;
     const goldUpdates = extractAll('GOLD');
     const conditionUpdate = extractAll('CONDITION')[0] || null;
+
+    // Limpieza final: líneas que quedaron con solo corchetes/llaves sueltas
+    narration = narration.replace(/^[ \t]*[\[\]\{\}\/]+[ \t]*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
 
     return { narration, stateUpdates, actions, legacy, deathNarration, rollRequest, npcUpdates, learnUpdates, questUpdates, combatUpdate, goldUpdates, conditionUpdate };
 }
